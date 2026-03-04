@@ -1,4 +1,5 @@
 use dirs::home_dir;
+use std::path::Path;
 use std::path::PathBuf;
 
 const CODEX_HOME_ENV_VAR: &str = "CODEX_HOME";
@@ -41,6 +42,19 @@ pub fn find_codex_home() -> std::io::Result<PathBuf> {
             .map(|override_env| override_env.env_var_name),
         executable_name.as_deref(),
     )
+}
+
+/// Returns the project-local config directory name for the current execution context.
+///
+/// Resolution order:
+/// - `dccodex*` executable name => `.dccodex`
+/// - `codex_home` basename is `.dccodex` => `.dccodex`
+/// - otherwise => `.codex`
+///
+/// This keeps project-local config isolated when `dccodex` is used, while also
+/// honoring explicitly passed `codex_home` paths that end in `.dccodex`.
+pub fn project_config_dir_name(codex_home: &Path) -> &'static str {
+    project_config_dir_name_for(current_executable_name().as_deref(), codex_home)
 }
 
 fn current_executable_name() -> Option<String> {
@@ -97,6 +111,21 @@ fn default_home_dirname(executable_name: Option<&str>) -> &'static str {
     } else {
         CODEX_HOME_DIRNAME
     }
+}
+
+fn project_config_dir_name_for(executable_name: Option<&str>, codex_home: &Path) -> &'static str {
+    if is_dccodex_executable(executable_name) || is_dccodex_home_dir(codex_home) {
+        DCCODEX_HOME_DIRNAME
+    } else {
+        CODEX_HOME_DIRNAME
+    }
+}
+
+fn is_dccodex_home_dir(codex_home: &Path) -> bool {
+    codex_home
+        .file_name()
+        .and_then(std::ffi::OsStr::to_str)
+        .is_some_and(|name| name.eq_ignore_ascii_case(DCCODEX_HOME_DIRNAME))
 }
 
 fn find_codex_home_from_env(
@@ -156,6 +185,7 @@ fn find_codex_home_from_env(
 mod tests {
     use super::default_home_dirname;
     use super::find_codex_home_from_env;
+    use super::project_config_dir_name_for;
     use super::resolve_home_env_override;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
@@ -271,5 +301,27 @@ mod tests {
         assert_eq!(default_home_dirname(Some("dccodex")), ".dccodex");
         assert_eq!(default_home_dirname(Some("dccodex-test")), ".dccodex");
         assert_eq!(default_home_dirname(Some("codex")), ".codex");
+    }
+
+    #[test]
+    fn project_config_dir_name_uses_dccodex_for_dccodex_executable() {
+        let resolved = project_config_dir_name_for(Some("dccodex"), std::path::Path::new("/tmp/x"));
+        assert_eq!(resolved, ".dccodex");
+    }
+
+    #[test]
+    fn project_config_dir_name_uses_dccodex_when_home_basename_is_dccodex() {
+        let resolved = project_config_dir_name_for(
+            Some("codex"),
+            std::path::Path::new("/home/alice/.dccodex"),
+        );
+        assert_eq!(resolved, ".dccodex");
+    }
+
+    #[test]
+    fn project_config_dir_name_defaults_to_codex() {
+        let resolved =
+            project_config_dir_name_for(Some("codex"), std::path::Path::new("/home/alice/custom"));
+        assert_eq!(resolved, ".codex");
     }
 }

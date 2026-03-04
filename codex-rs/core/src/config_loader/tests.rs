@@ -1038,6 +1038,75 @@ async fn codex_home_within_project_tree_is_not_double_loaded() -> std::io::Resul
 }
 
 #[tokio::test]
+async fn dccodex_home_prefers_project_dccodex_dir_over_project_codex_dir() -> std::io::Result<()> {
+    let tmp = tempdir()?;
+    let home_dir = tmp.path().join("home");
+    let codex_home = home_dir.join(".dccodex");
+    tokio::fs::create_dir_all(&codex_home).await?;
+
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let nested_dot_dccodex = nested.join(".dccodex");
+    let nested_dot_codex = nested.join(".codex");
+
+    tokio::fs::create_dir_all(&nested_dot_dccodex).await?;
+    tokio::fs::create_dir_all(&nested_dot_codex).await?;
+    tokio::fs::create_dir_all(project_root.join(".git")).await?;
+    tokio::fs::write(
+        nested_dot_dccodex.join(CONFIG_TOML_FILE),
+        "foo = \"from_dccodex\"\n",
+    )
+    .await?;
+    tokio::fs::write(
+        nested_dot_codex.join(CONFIG_TOML_FILE),
+        "foo = \"from_codex\"\n",
+    )
+    .await?;
+
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let cwd = AbsolutePathBuf::from_absolute_path(&nested)?;
+    let layers = load_config_layers_state(
+        &codex_home,
+        Some(cwd),
+        &[] as &[(String, TomlValue)],
+        LoaderOverrides::default(),
+        CloudRequirementsLoader::default(),
+    )
+    .await?;
+
+    let project_layers: Vec<_> = layers
+        .get_layers(
+            super::ConfigLayerStackOrdering::HighestPrecedenceFirst,
+            true,
+        )
+        .into_iter()
+        .filter(|layer| matches!(layer.name, super::ConfigLayerSource::Project { .. }))
+        .collect();
+
+    let dccodex_config: TomlValue =
+        toml::from_str("foo = \"from_dccodex\"\n").expect("parse dccodex config");
+    assert_eq!(
+        vec![&ConfigLayerEntry {
+            name: super::ConfigLayerSource::Project {
+                dot_codex_folder: AbsolutePathBuf::from_absolute_path(&nested_dot_dccodex)?,
+            },
+            config: dccodex_config.clone(),
+            raw_toml: None,
+            version: version_for_toml(&dccodex_config),
+            disabled_reason: None,
+        }],
+        project_layers
+    );
+    assert_eq!(
+        layers.effective_config().get("foo"),
+        Some(&TomlValue::String("from_dccodex".to_string()))
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
 async fn project_layers_disabled_when_untrusted_or_unknown() -> std::io::Result<()> {
     let tmp = tempdir()?;
     let project_root = tmp.path().join("project");

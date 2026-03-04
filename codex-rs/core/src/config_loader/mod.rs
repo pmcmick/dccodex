@@ -96,8 +96,12 @@ pub(crate) async fn first_layer_config_error_from_entries(
 ///   `%ProgramData%\OpenAI\Codex\config.toml` (Windows)
 /// - user      `${CODEX_HOME}/config.toml`
 /// - cwd       `${PWD}/config.toml` (loaded but disabled when the directory is untrusted)
-/// - tree      parent directories up to root looking for `./.codex/config.toml` (loaded but disabled when untrusted)
-/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (loaded but disabled when untrusted)
+/// - tree      parent directories up to root looking for
+///   `./.codex/config.toml` (`codex`) or
+///   `./.dccodex/config.toml` (`dccodex`) (loaded but disabled when untrusted)
+/// - repo      `$(git rev-parse --show-toplevel)/.codex/config.toml` (`codex`) or
+///   `$(git rev-parse --show-toplevel)/.dccodex/config.toml` (`dccodex`)
+///   (loaded but disabled when untrusted)
 /// - runtime   e.g., --config flags, model selector in UI
 ///
 /// (*) Only available on macOS via managed device profiles.
@@ -792,6 +796,7 @@ async fn load_project_layers(
     trust_context: &ProjectTrustContext,
     codex_home: &Path,
 ) -> io::Result<Vec<ConfigLayerEntry>> {
+    let project_config_dir_name = codex_utils_home_dir::project_config_dir_name(codex_home);
     let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home)?;
     let codex_home_normalized =
         normalize_path(codex_home_abs.as_path()).unwrap_or_else(|_| codex_home_abs.to_path_buf());
@@ -813,7 +818,7 @@ async fn load_project_layers(
 
     let mut layers = Vec::new();
     for dir in dirs {
-        let dot_codex = dir.join(".codex");
+        let dot_codex = dir.join(project_config_dir_name);
         if !tokio::fs::metadata(&dot_codex)
             .await
             .map(|meta| meta.is_dir())

@@ -19,9 +19,9 @@ Override order:
 
 In addition to `~/.codex/config.toml`, Codex supports project-local config files at `.codex/config.toml`.
 When both are present, project-local values override user-level values.
-`dccodex` uses the same project-local path (`.codex/config.toml`).
+`dccodex` uses `.dccodex/config.toml`.
 
-Codex discovers project-local `.codex/config.toml` files between your current working directory and the project root, and applies them in order so the closest directory to your `cwd` has the highest precedence.
+Codex discovers project-local config files between your current working directory and the project root (`.codex/config.toml` for `codex`, `.dccodex/config.toml` for `dccodex`), and applies them in order so the closest directory to your `cwd` has the highest precedence.
 
 Project-local config is only applied for trusted projects. Add trust in
 `~/.codex/config.toml` (or `~/.dccodex/config.toml` when running `dccodex`):

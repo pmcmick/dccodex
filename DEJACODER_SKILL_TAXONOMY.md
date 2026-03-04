@@ -188,7 +188,7 @@ If frontmatter is missing or invalid, the skill will not load.
 
 Codex discovers skills from these locations:
 
-- Project-local: `.codex/skills/<skill-name>/SKILL.md`
+- Project-local: `.codex/skills/<skill-name>/SKILL.md` (`codex`) or `.dccodex/skills/<skill-name>/SKILL.md` (`dccodex`)
 - Repo-scoped: `.agents/skills/<skill-name>/SKILL.md` (between project root and current working dir)
 - User-global (preferred): `~/.agents/skills/<skill-name>/SKILL.md`
 - User-global (legacy, still supported): `~/.codex/skills/<skill-name>/SKILL.md`
