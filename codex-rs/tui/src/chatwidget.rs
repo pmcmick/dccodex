@@ -168,7 +168,8 @@ use tracing::warn;
 const DEFAULT_MODEL_DISPLAY_NAME: &str = "loading";
 const PLAN_IMPLEMENTATION_TITLE: &str = "Implement this plan?";
 const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
-const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
+const PLAN_IMPLEMENTATION_REFINE: &str = "Refine plan (stay in Plan mode)";
+const PLAN_IMPLEMENTATION_EXIT: &str = "Exit Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable multi-agent?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
@@ -1618,7 +1619,7 @@ impl ChatWidget {
 
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.models_manager.as_ref());
-        let (implement_actions, implement_disabled_reason) = match default_mask {
+        let (implement_actions, implement_disabled_reason) = match default_mask.clone() {
             Some(mask) => {
                 let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
@@ -1643,11 +1644,30 @@ impl ChatWidget {
                 ..Default::default()
             },
             SelectionItem {
-                name: PLAN_IMPLEMENTATION_NO.to_string(),
+                name: PLAN_IMPLEMENTATION_REFINE.to_string(),
                 description: Some("Continue planning with the model.".to_string()),
                 selected_description: None,
                 is_current: false,
                 actions: Vec::new(),
+                dismiss_on_select: true,
+                ..Default::default()
+            },
+            SelectionItem {
+                name: PLAN_IMPLEMENTATION_EXIT.to_string(),
+                description: Some("Switch to Default mode without implementing yet.".to_string()),
+                selected_description: None,
+                is_current: false,
+                actions: match default_mask.clone() {
+                    Some(mask) => vec![Box::new(move |tx| {
+                        tx.send(AppEvent::UpdateCollaborationMode(mask.clone()));
+                    })],
+                    None => Vec::new(),
+                },
+                disabled_reason: if default_mask.is_none() {
+                    Some("Default mode unavailable".to_string())
+                } else {
+                    None
+                },
                 dismiss_on_select: true,
                 ..Default::default()
             },
@@ -4055,6 +4075,9 @@ impl ChatWidget {
             }
             SlashCommand::Mcp => {
                 self.add_mcp_output();
+            }
+            SlashCommand::Hooks => {
+                self.add_hooks_output();
             }
             SlashCommand::Apps => {
                 self.add_connectors_output();
@@ -7657,6 +7680,10 @@ impl ChatWidget {
         } else {
             self.submit_op(Op::ListMcpTools);
         }
+    }
+
+    pub(crate) fn add_hooks_output(&mut self) {
+        self.add_to_history(history_cell::new_hooks_output(&self.config));
     }
 
     pub(crate) fn add_connectors_output(&mut self) {

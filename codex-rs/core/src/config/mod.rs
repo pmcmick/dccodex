@@ -268,7 +268,153 @@ pub struct Config {
     /// ```
     ///
     /// If unset the feature is disabled.
-    pub notify: Option<Vec<String>>,
+    pub notify: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked immediately after each user
+    /// prompt submission is accepted. The command receives one appended JSON
+    /// argument containing the full hook payload including
+    /// `event_type=after_user_prompt_submit`.
+    ///
+    /// The hook can append text to the prompt by writing JSON to stdout:
+    ///
+    /// ```json
+    /// {"append_prompt_text":"your additional instructions"}
+    /// ```
+    ///
+    /// It can also request automatic Plan mode switching for the turn:
+    ///
+    /// ```json
+    /// {"switch_to_plan_mode":true}
+    /// ```
+    ///
+    /// Both fields can be returned together in one response object.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify_on_user_prompt_submit = ["python3", "/path/to/hook.py"]
+    /// ```
+    pub notify_on_user_prompt_submit: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked immediately before each model
+    /// sampling request.
+    ///
+    /// The command receives one appended JSON argument containing
+    /// `event_type=before_model_request`.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify_on_before_model_request = ["python3", "/path/to/hook.py"]
+    /// ```
+    pub notify_on_before_model_request: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a model stream emits a
+    /// `response.created` event.
+    ///
+    /// The command receives one appended JSON argument containing
+    /// `event_type=after_model_response_created`.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify_on_model_response_created = ["python3", "/path/to/hook.py"]
+    /// ```
+    pub notify_on_model_response_created: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a turn starts.
+    /// Receives `event_type=turn_started`.
+    pub notify_on_turn_started: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a turn completes.
+    /// Receives `event_type=turn_completed`.
+    pub notify_on_turn_completed: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a turn is aborted.
+    /// Receives `event_type=turn_aborted`.
+    pub notify_on_turn_aborted: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked after session configuration
+    /// is emitted (session start). Receives `event_type=session_start`.
+    pub notify_on_session_start: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked during shutdown.
+    /// Receives `event_type=session_shutdown`.
+    pub notify_on_session_shutdown: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked for compaction lifecycle
+    /// events. Receives `event_type=compaction`.
+    pub notify_on_compaction: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked after every tool execution.
+    /// The command receives one appended JSON argument containing the full
+    /// hook payload including `event_type=after_tool_use`.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify_on_after_tool_use = ["python3", "/path/to/hook.py"]
+    /// ```
+    pub notify_on_after_tool_use: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked immediately before every tool execution.
+    ///
+    /// The command receives one appended JSON argument containing
+    /// `event_type=pre_tool_use`.
+    ///
+    /// The hook can return JSON on stdout to control execution:
+    ///
+    /// ```json
+    /// {"decision":"allow"}
+    /// {"decision":"deny","message":"reason"}
+    /// {"decision":"replace","output":"replacement text","success":false}
+    /// ```
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify_on_pre_tool_use = ["python3", "/path/to/hook.py"]
+    /// ```
+    pub notify_on_pre_tool_use: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a tool invocation fails.
+    ///
+    /// The command receives one appended JSON argument containing
+    /// `event_type=tool_failure`.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify_on_tool_failure = ["python3", "/path/to/hook.py"]
+    /// ```
+    pub notify_on_tool_failure: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked after successful tool executions.
+    ///
+    /// The command receives one appended JSON argument containing
+    /// `event_type=post_tool_use_success`.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify_on_post_tool_use_success = ["python3", "/path/to/hook.py"]
+    /// ```
+    pub notify_on_post_tool_use_success: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked whenever a model response
+    /// stream emits `response.completed`.
+    ///
+    /// The command receives one appended JSON argument containing the full
+    /// hook payload including `event_type=after_model_response_completed` and
+    /// per-response token usage when available. In Plan mode, payloads also
+    /// include `proposed_plan` when the model emits a `<proposed_plan>` block.
+    ///
+    /// Example `~/.codex/config.toml` snippet:
+    ///
+    /// ```toml
+    /// notify_on_model_response_completed = ["python3", "/path/to/hook.py"]
+    /// ```
+    pub notify_on_model_response_completed: Option<Vec<Vec<String>>>,
 
     /// TUI notifications preference. When set, the TUI will send terminal notifications on
     /// approvals and turn completions when not focused.
@@ -516,6 +662,13 @@ pub struct Config {
     pub otel: crate::config::types::OtelConfig,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct HookCommandConfigEntry<'a> {
+    pub config_key: &'static str,
+    pub event_type: &'static str,
+    pub commands: &'a [Vec<String>],
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct ConfigBuilder {
     codex_home: Option<PathBuf>,
@@ -664,6 +817,147 @@ impl Config {
             .harness_overrides(harness_overrides)
             .build()
             .await
+    }
+
+    pub fn configured_hook_command_entries(&self) -> Vec<HookCommandConfigEntry<'_>> {
+        let mut entries = Vec::new();
+        if let Some(commands) = self.notify.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify",
+                event_type: "after_agent",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_user_prompt_submit.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_user_prompt_submit",
+                event_type: "after_user_prompt_submit",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_before_model_request.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_before_model_request",
+                event_type: "before_model_request",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_model_response_created.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_model_response_created",
+                event_type: "after_model_response_created",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_turn_started.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_turn_started",
+                event_type: "turn_started",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_turn_completed.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_turn_completed",
+                event_type: "turn_completed",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_turn_aborted.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_turn_aborted",
+                event_type: "turn_aborted",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_session_start.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_session_start",
+                event_type: "session_start",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_session_shutdown.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_session_shutdown",
+                event_type: "session_shutdown",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_compaction.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_compaction",
+                event_type: "compaction",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_after_tool_use.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_after_tool_use",
+                event_type: "after_tool_use",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_pre_tool_use.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_pre_tool_use",
+                event_type: "pre_tool_use",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_tool_failure.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_tool_failure",
+                event_type: "tool_failure",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_post_tool_use_success.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_post_tool_use_success",
+                event_type: "post_tool_use_success",
+                commands,
+            });
+        }
+        if let Some(commands) = self.notify_on_model_response_completed.as_deref()
+            && !commands.is_empty()
+        {
+            entries.push(HookCommandConfigEntry {
+                config_key: "notify_on_model_response_completed",
+                event_type: "after_model_response_completed",
+                commands,
+            });
+        }
+
+        entries
     }
 }
 
@@ -1006,6 +1300,35 @@ pub fn set_default_oss_provider(codex_home: &Path, provider: &str) -> std::io::R
 }
 
 /// Base config deserialized from ~/.codex/config.toml.
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum HookCommandsToml {
+    Single(Vec<String>),
+    Multiple(Vec<Vec<String>>),
+}
+
+impl HookCommandsToml {
+    fn into_commands(self) -> Vec<Vec<String>> {
+        match self {
+            Self::Single(command) => vec![command],
+            Self::Multiple(commands) => commands,
+        }
+    }
+}
+
+fn normalize_hook_commands(commands: Option<HookCommandsToml>) -> Option<Vec<Vec<String>>> {
+    let commands = commands?
+        .into_commands()
+        .into_iter()
+        .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+        .collect::<Vec<_>>();
+    if commands.is_empty() {
+        None
+    } else {
+        Some(commands)
+    }
+}
+
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq, JsonSchema)]
 #[schemars(deny_unknown_fields)]
 pub struct ConfigToml {
@@ -1051,7 +1374,64 @@ pub struct ConfigToml {
 
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
-    pub notify: Option<Vec<String>>,
+    pub notify: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn after each accepted user prompt
+    /// submission.
+    #[serde(default)]
+    pub notify_on_user_prompt_submit: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn before each model sampling request.
+    #[serde(default)]
+    pub notify_on_before_model_request: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn when model streaming begins.
+    #[serde(default)]
+    pub notify_on_model_response_created: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn when a turn starts.
+    #[serde(default)]
+    pub notify_on_turn_started: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn when a turn completes.
+    #[serde(default)]
+    pub notify_on_turn_completed: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn when a turn is aborted.
+    #[serde(default)]
+    pub notify_on_turn_aborted: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn at session start.
+    #[serde(default)]
+    pub notify_on_session_start: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn at session shutdown.
+    #[serde(default)]
+    pub notify_on_session_shutdown: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn for compaction lifecycle events.
+    #[serde(default)]
+    pub notify_on_compaction: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn after each tool execution.
+    #[serde(default)]
+    pub notify_on_after_tool_use: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn before each tool execution.
+    #[serde(default)]
+    pub notify_on_pre_tool_use: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn after failed tool executions.
+    #[serde(default)]
+    pub notify_on_tool_failure: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn after successful tool executions.
+    #[serde(default)]
+    pub notify_on_post_tool_use_success: Option<HookCommandsToml>,
+
+    /// Optional external command to spawn after each completed model response.
+    #[serde(default)]
+    pub notify_on_model_response_completed: Option<HookCommandsToml>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -2140,7 +2520,29 @@ impl Config {
                 macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: enforce_residency.value,
-            notify: cfg.notify,
+            notify: normalize_hook_commands(cfg.notify),
+            notify_on_user_prompt_submit: normalize_hook_commands(cfg.notify_on_user_prompt_submit),
+            notify_on_before_model_request: normalize_hook_commands(
+                cfg.notify_on_before_model_request,
+            ),
+            notify_on_model_response_created: normalize_hook_commands(
+                cfg.notify_on_model_response_created,
+            ),
+            notify_on_turn_started: normalize_hook_commands(cfg.notify_on_turn_started),
+            notify_on_turn_completed: normalize_hook_commands(cfg.notify_on_turn_completed),
+            notify_on_turn_aborted: normalize_hook_commands(cfg.notify_on_turn_aborted),
+            notify_on_session_start: normalize_hook_commands(cfg.notify_on_session_start),
+            notify_on_session_shutdown: normalize_hook_commands(cfg.notify_on_session_shutdown),
+            notify_on_compaction: normalize_hook_commands(cfg.notify_on_compaction),
+            notify_on_after_tool_use: normalize_hook_commands(cfg.notify_on_after_tool_use),
+            notify_on_pre_tool_use: normalize_hook_commands(cfg.notify_on_pre_tool_use),
+            notify_on_tool_failure: normalize_hook_commands(cfg.notify_on_tool_failure),
+            notify_on_post_tool_use_success: normalize_hook_commands(
+                cfg.notify_on_post_tool_use_success,
+            ),
+            notify_on_model_response_completed: normalize_hook_commands(
+                cfg.notify_on_model_response_completed,
+            ),
             user_instructions,
             base_instructions,
             personality,
@@ -2723,6 +3125,117 @@ allowed_domains = ["openai.com"]
                 allow_unix_sockets: None,
                 allow_local_binding: None,
             }
+        );
+    }
+
+    #[test]
+    fn hook_commands_deserializes_single_command_form() {
+        let toml = r#"
+notify_on_after_tool_use = ["python3", "/tmp/hook.py"]
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for hook commands");
+        assert_eq!(
+            cfg.notify_on_after_tool_use,
+            Some(HookCommandsToml::Single(vec![
+                "python3".to_string(),
+                "/tmp/hook.py".to_string(),
+            ]))
+        );
+    }
+
+    #[test]
+    fn hook_commands_deserializes_multiple_command_form() {
+        let toml = r#"
+notify_on_after_tool_use = [
+  ["python3", "/tmp/a.py"],
+  ["python3", "/tmp/b.py"],
+]
+"#;
+        let cfg: ConfigToml =
+            toml::from_str(toml).expect("TOML deserialization should succeed for hook commands");
+        assert_eq!(
+            cfg.notify_on_after_tool_use,
+            Some(HookCommandsToml::Multiple(vec![
+                vec!["python3".to_string(), "/tmp/a.py".to_string()],
+                vec!["python3".to_string(), "/tmp/b.py".to_string()],
+            ]))
+        );
+    }
+
+    #[test]
+    fn config_load_normalizes_single_hook_command_to_list() -> std::io::Result<()> {
+        let codex_home = TempDir::new()?;
+        let cfg: ConfigToml =
+            toml::from_str(r#"notify_on_after_tool_use = ["python3", "/tmp/hook.py"]"#)
+                .expect("TOML deserialization should succeed");
+        let config = Config::load_from_base_config_with_overrides(
+            cfg,
+            ConfigOverrides::default(),
+            codex_home.path().to_path_buf(),
+        )?;
+        assert_eq!(
+            config.notify_on_after_tool_use,
+            Some(vec![vec![
+                "python3".to_string(),
+                "/tmp/hook.py".to_string()
+            ]])
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn configured_hook_command_entries_lists_only_configured_hooks_in_event_order() {
+        let config = Config {
+            notify: Some(vec![vec![
+                "python3".to_string(),
+                "/tmp/after-agent.py".to_string(),
+            ]]),
+            notify_on_before_model_request: Some(vec![vec![
+                "python3".to_string(),
+                "/tmp/before-model.py".to_string(),
+            ]]),
+            notify_on_pre_tool_use: Some(vec![
+                vec!["python3".to_string(), "/tmp/pre-tool-a.py".to_string()],
+                vec!["python3".to_string(), "/tmp/pre-tool-b.py".to_string()],
+            ]),
+            ..test_config()
+        };
+
+        let entries: Vec<(&str, &str, Vec<Vec<String>>)> = config
+            .configured_hook_command_entries()
+            .into_iter()
+            .map(|entry| (entry.config_key, entry.event_type, entry.commands.to_vec()))
+            .collect();
+
+        assert_eq!(
+            entries,
+            vec![
+                (
+                    "notify",
+                    "after_agent",
+                    vec![vec![
+                        "python3".to_string(),
+                        "/tmp/after-agent.py".to_string()
+                    ]],
+                ),
+                (
+                    "notify_on_before_model_request",
+                    "before_model_request",
+                    vec![vec![
+                        "python3".to_string(),
+                        "/tmp/before-model.py".to_string()
+                    ]],
+                ),
+                (
+                    "notify_on_pre_tool_use",
+                    "pre_tool_use",
+                    vec![
+                        vec!["python3".to_string(), "/tmp/pre-tool-a.py".to_string()],
+                        vec!["python3".to_string(), "/tmp/pre-tool-b.py".to_string()],
+                    ],
+                ),
+            ]
         );
     }
 
@@ -5178,6 +5691,20 @@ model_verbosity = "high"
                 enforce_residency: Constrained::allow_any(None),
                 user_instructions: None,
                 notify: None,
+                notify_on_user_prompt_submit: None,
+                notify_on_before_model_request: None,
+                notify_on_model_response_created: None,
+                notify_on_turn_started: None,
+                notify_on_turn_completed: None,
+                notify_on_turn_aborted: None,
+                notify_on_session_start: None,
+                notify_on_session_shutdown: None,
+                notify_on_compaction: None,
+                notify_on_after_tool_use: None,
+                notify_on_pre_tool_use: None,
+                notify_on_tool_failure: None,
+                notify_on_post_tool_use_success: None,
+                notify_on_model_response_completed: None,
                 cwd: fixture.cwd(),
                 cli_auth_credentials_store_mode: Default::default(),
                 mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5307,6 +5834,20 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
+            notify_on_user_prompt_submit: None,
+            notify_on_before_model_request: None,
+            notify_on_model_response_created: None,
+            notify_on_turn_started: None,
+            notify_on_turn_completed: None,
+            notify_on_turn_aborted: None,
+            notify_on_session_start: None,
+            notify_on_session_shutdown: None,
+            notify_on_compaction: None,
+            notify_on_after_tool_use: None,
+            notify_on_pre_tool_use: None,
+            notify_on_tool_failure: None,
+            notify_on_post_tool_use_success: None,
+            notify_on_model_response_completed: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5434,6 +5975,20 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
+            notify_on_user_prompt_submit: None,
+            notify_on_before_model_request: None,
+            notify_on_model_response_created: None,
+            notify_on_turn_started: None,
+            notify_on_turn_completed: None,
+            notify_on_turn_aborted: None,
+            notify_on_session_start: None,
+            notify_on_session_shutdown: None,
+            notify_on_compaction: None,
+            notify_on_after_tool_use: None,
+            notify_on_pre_tool_use: None,
+            notify_on_tool_failure: None,
+            notify_on_post_tool_use_success: None,
+            notify_on_model_response_completed: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),
@@ -5547,6 +6102,20 @@ model_verbosity = "high"
             enforce_residency: Constrained::allow_any(None),
             user_instructions: None,
             notify: None,
+            notify_on_user_prompt_submit: None,
+            notify_on_before_model_request: None,
+            notify_on_model_response_created: None,
+            notify_on_turn_started: None,
+            notify_on_turn_completed: None,
+            notify_on_turn_aborted: None,
+            notify_on_session_start: None,
+            notify_on_session_shutdown: None,
+            notify_on_compaction: None,
+            notify_on_after_tool_use: None,
+            notify_on_pre_tool_use: None,
+            notify_on_tool_failure: None,
+            notify_on_post_tool_use_success: None,
+            notify_on_model_response_completed: None,
             cwd: fixture.cwd(),
             cli_auth_credentials_store_mode: Default::default(),
             mcp_servers: Constrained::allow_any(HashMap::new()),

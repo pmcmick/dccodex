@@ -1,0 +1,13 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered
+---
+/hooks
+
+🪝  Hooks
+
+  • after_agent (notify)
+    1. python3 /tmp/after-agent.py
+  • pre_tool_use (notify_on_pre_tool_use)
+    1. python3 /tmp/pre-tool.py
+    2. python3 /tmp/pre-tool-2.py

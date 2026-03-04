@@ -1,0 +1,10 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: rendered
+---
+/hooks
+
+🪝  Hooks
+
+  • No hooks configured.
+  • Add `notify`/`notify_on_*` keys in config.toml.

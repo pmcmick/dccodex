@@ -50,7 +50,7 @@ mv "${tmp_path}" "${payload_path}""#,
     let notify_script_str = notify_script.to_str().unwrap().to_string();
 
     let TestCodex { codex, .. } = test_codex()
-        .with_config(move |cfg| cfg.notify = Some(vec![notify_script_str]))
+        .with_config(move |cfg| cfg.notify = Some(vec![vec![notify_script_str]]))
         .build(&server)
         .await?;
 

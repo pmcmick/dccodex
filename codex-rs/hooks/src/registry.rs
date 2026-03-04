@@ -7,13 +7,40 @@ use crate::types::HookResponse;
 
 #[derive(Default, Clone)]
 pub struct HooksConfig {
-    pub legacy_notify_argv: Option<Vec<String>>,
+    pub legacy_notify_argv: Option<Vec<Vec<String>>>,
+    pub after_user_prompt_submit_argv: Option<Vec<Vec<String>>>,
+    pub before_model_request_argv: Option<Vec<Vec<String>>>,
+    pub after_model_response_created_argv: Option<Vec<Vec<String>>>,
+    pub turn_started_argv: Option<Vec<Vec<String>>>,
+    pub turn_completed_argv: Option<Vec<Vec<String>>>,
+    pub turn_aborted_argv: Option<Vec<Vec<String>>>,
+    pub session_start_argv: Option<Vec<Vec<String>>>,
+    pub session_shutdown_argv: Option<Vec<Vec<String>>>,
+    pub compaction_argv: Option<Vec<Vec<String>>>,
+    pub after_tool_use_argv: Option<Vec<Vec<String>>>,
+    pub pre_tool_use_argv: Option<Vec<Vec<String>>>,
+    pub tool_failure_argv: Option<Vec<Vec<String>>>,
+    pub post_tool_use_success_argv: Option<Vec<Vec<String>>>,
+    pub after_model_response_completed_argv: Option<Vec<Vec<String>>>,
 }
 
 #[derive(Clone)]
 pub struct Hooks {
     after_agent: Vec<Hook>,
+    after_user_prompt_submit: Vec<Hook>,
+    before_model_request: Vec<Hook>,
+    after_model_response_created: Vec<Hook>,
+    turn_started: Vec<Hook>,
+    turn_completed: Vec<Hook>,
+    turn_aborted: Vec<Hook>,
+    session_start: Vec<Hook>,
+    session_shutdown: Vec<Hook>,
+    compaction: Vec<Hook>,
     after_tool_use: Vec<Hook>,
+    pre_tool_use: Vec<Hook>,
+    tool_failure: Vec<Hook>,
+    post_tool_use_success: Vec<Hook>,
+    after_model_response_completed: Vec<Hook>,
 }
 
 impl Default for Hooks {
@@ -26,22 +53,152 @@ impl Default for Hooks {
 // executed after specific events in the Codex lifecycle.
 impl Hooks {
     pub fn new(config: HooksConfig) -> Self {
-        let after_agent = config
-            .legacy_notify_argv
+        let HooksConfig {
+            legacy_notify_argv,
+            after_user_prompt_submit_argv,
+            before_model_request_argv,
+            after_model_response_created_argv,
+            turn_started_argv,
+            turn_completed_argv,
+            turn_aborted_argv,
+            session_start_argv,
+            session_shutdown_argv,
+            compaction_argv,
+            after_tool_use_argv,
+            pre_tool_use_argv,
+            tool_failure_argv,
+            post_tool_use_success_argv,
+            after_model_response_completed_argv,
+        } = config;
+
+        let after_agent = legacy_notify_argv
+            .into_iter()
+            .flatten()
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
             .map(crate::notify_hook)
+            .collect();
+        let after_user_prompt_submit = after_user_prompt_submit_argv
             .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(crate::after_user_prompt_submit_hook)
+            .collect();
+        let before_model_request = before_model_request_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("before_model_request".to_string(), argv))
+            .collect();
+        let after_model_response_created = after_model_response_created_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("after_model_response_created".to_string(), argv))
+            .collect();
+        let turn_started = turn_started_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("turn_started".to_string(), argv))
+            .collect();
+        let turn_completed = turn_completed_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("turn_completed".to_string(), argv))
+            .collect();
+        let turn_aborted = turn_aborted_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("turn_aborted".to_string(), argv))
+            .collect();
+        let session_start = session_start_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("session_start".to_string(), argv))
+            .collect();
+        let session_shutdown = session_shutdown_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("session_shutdown".to_string(), argv))
+            .collect();
+        let compaction = compaction_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("compaction".to_string(), argv))
+            .collect();
+        let after_tool_use = after_tool_use_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("after_tool_use".to_string(), argv))
+            .collect();
+        let pre_tool_use = pre_tool_use_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(crate::pre_tool_use_hook)
+            .collect();
+        let tool_failure = tool_failure_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("tool_failure".to_string(), argv))
+            .collect();
+        let post_tool_use_success = post_tool_use_success_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("post_tool_use_success".to_string(), argv))
+            .collect();
+        let after_model_response_completed = after_model_response_completed_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| {
+                crate::json_payload_hook("after_model_response_completed".to_string(), argv)
+            })
             .collect();
         Self {
             after_agent,
-            after_tool_use: Vec::new(),
+            after_user_prompt_submit,
+            before_model_request,
+            after_model_response_created,
+            turn_started,
+            turn_completed,
+            turn_aborted,
+            session_start,
+            session_shutdown,
+            compaction,
+            after_tool_use,
+            pre_tool_use,
+            tool_failure,
+            post_tool_use_success,
+            after_model_response_completed,
         }
     }
 
     fn hooks_for_event(&self, hook_event: &HookEvent) -> &[Hook] {
         match hook_event {
             HookEvent::AfterAgent { .. } => &self.after_agent,
+            HookEvent::AfterUserPromptSubmit { .. } => &self.after_user_prompt_submit,
+            HookEvent::BeforeModelRequest { .. } => &self.before_model_request,
+            HookEvent::AfterModelResponseCreated { .. } => &self.after_model_response_created,
+            HookEvent::TurnStarted { .. } => &self.turn_started,
+            HookEvent::TurnCompleted { .. } => &self.turn_completed,
+            HookEvent::TurnAborted { .. } => &self.turn_aborted,
+            HookEvent::SessionStart { .. } => &self.session_start,
+            HookEvent::SessionShutdown { .. } => &self.session_shutdown,
+            HookEvent::Compaction { .. } => &self.compaction,
             HookEvent::AfterToolUse { .. } => &self.after_tool_use,
+            HookEvent::PreToolUse { .. } => &self.pre_tool_use,
+            HookEvent::ToolFailure { .. } => &self.tool_failure,
+            HookEvent::PostToolUseSuccess { .. } => &self.post_tool_use_success,
+            HookEvent::AfterModelResponseCompleted { .. } => &self.after_model_response_completed,
         }
     }
 
@@ -91,8 +248,24 @@ mod tests {
     use tokio::time::timeout;
 
     use super::*;
+    use crate::types::HookCompactionStatus;
+    use crate::types::HookCompactionStrategy;
+    use crate::types::HookCompactionTrigger;
     use crate::types::HookEventAfterAgent;
+    use crate::types::HookEventAfterModelResponseCompleted;
+    use crate::types::HookEventAfterModelResponseCreated;
     use crate::types::HookEventAfterToolUse;
+    use crate::types::HookEventAfterUserPromptSubmit;
+    use crate::types::HookEventBeforeModelRequest;
+    use crate::types::HookEventCompaction;
+    use crate::types::HookEventPostToolUseSuccess;
+    use crate::types::HookEventPreToolUse;
+    use crate::types::HookEventSessionShutdown;
+    use crate::types::HookEventSessionStart;
+    use crate::types::HookEventToolFailure;
+    use crate::types::HookEventTurnAborted;
+    use crate::types::HookEventTurnCompleted;
+    use crate::types::HookEventTurnStarted;
     use crate::types::HookResult;
     use crate::types::HookToolInput;
     use crate::types::HookToolKind;
@@ -115,6 +288,7 @@ mod tests {
                     turn_id: format!("turn-{label}"),
                     input_messages: vec![INPUT_MESSAGE.to_string()],
                     last_assistant_message: Some("hi".to_string()),
+                    proposed_plan: None,
                 },
             },
         }
@@ -199,6 +373,288 @@ mod tests {
         }
     }
 
+    fn after_user_prompt_submit_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::AfterUserPromptSubmit {
+                event: HookEventAfterUserPromptSubmit {
+                    thread_id: ThreadId::new(),
+                    turn_id: format!("turn-{label}"),
+                    input_messages: vec![INPUT_MESSAGE.to_string()],
+                },
+            },
+        }
+    }
+
+    fn after_model_response_completed_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::AfterModelResponseCompleted {
+                event: HookEventAfterModelResponseCompleted {
+                    thread_id: ThreadId::new(),
+                    turn_id: format!("turn-{label}"),
+                    response_id: format!("resp-{label}"),
+                    token_usage: None,
+                    can_append: false,
+                    needs_follow_up: false,
+                    proposed_plan: None,
+                },
+            },
+        }
+    }
+
+    fn before_model_request_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::BeforeModelRequest {
+                event: HookEventBeforeModelRequest {
+                    thread_id: ThreadId::new(),
+                    turn_id: format!("turn-{label}"),
+                    model: "gpt-5-codex".to_string(),
+                    sampling_request_index: 1,
+                    input_messages: vec![INPUT_MESSAGE.to_string()],
+                },
+            },
+        }
+    }
+
+    fn after_model_response_created_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::AfterModelResponseCreated {
+                event: HookEventAfterModelResponseCreated {
+                    thread_id: ThreadId::new(),
+                    turn_id: format!("turn-{label}"),
+                    model: "gpt-5-codex".to_string(),
+                    sampling_request_index: 1,
+                },
+            },
+        }
+    }
+
+    fn turn_started_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::TurnStarted {
+                event: HookEventTurnStarted {
+                    thread_id: ThreadId::new(),
+                    turn_id: format!("turn-{label}"),
+                    model_context_window: Some(200_000),
+                    collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+                },
+            },
+        }
+    }
+
+    fn turn_completed_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::TurnCompleted {
+                event: HookEventTurnCompleted {
+                    thread_id: ThreadId::new(),
+                    turn_id: format!("turn-{label}"),
+                    last_agent_message: Some("ok".to_string()),
+                },
+            },
+        }
+    }
+
+    fn turn_aborted_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::TurnAborted {
+                event: HookEventTurnAborted {
+                    thread_id: ThreadId::new(),
+                    turn_id: Some(format!("turn-{label}")),
+                    reason: codex_protocol::protocol::TurnAbortReason::Interrupted,
+                },
+            },
+        }
+    }
+
+    fn session_start_payload() -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::SessionStart {
+                event: HookEventSessionStart {
+                    thread_id: ThreadId::new(),
+                    model: "gpt-5-codex".to_string(),
+                    model_provider_id: "openai".to_string(),
+                    cwd: PathBuf::from(CWD),
+                },
+            },
+        }
+    }
+
+    fn session_shutdown_payload() -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::SessionShutdown {
+                event: HookEventSessionShutdown {
+                    thread_id: ThreadId::new(),
+                },
+            },
+        }
+    }
+
+    fn compaction_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::Compaction {
+                event: HookEventCompaction {
+                    thread_id: ThreadId::new(),
+                    turn_id: format!("turn-{label}"),
+                    trigger: HookCompactionTrigger::Manual,
+                    strategy: HookCompactionStrategy::Local,
+                    status: HookCompactionStatus::Started,
+                    error: None,
+                },
+            },
+        }
+    }
+
+    fn pre_tool_use_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::PreToolUse {
+                event: HookEventPreToolUse {
+                    turn_id: format!("turn-{label}"),
+                    call_id: format!("call-{label}"),
+                    tool_name: "apply_patch".to_string(),
+                    tool_kind: HookToolKind::Custom,
+                    tool_input: HookToolInput::Custom {
+                        input: "*** Begin Patch".to_string(),
+                    },
+                    mutating: true,
+                    sandbox: "none".to_string(),
+                    sandbox_policy: "danger-full-access".to_string(),
+                },
+            },
+        }
+    }
+
+    fn tool_failure_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::ToolFailure {
+                event: HookEventToolFailure {
+                    turn_id: format!("turn-{label}"),
+                    call_id: format!("call-{label}"),
+                    tool_name: "apply_patch".to_string(),
+                    tool_kind: HookToolKind::Custom,
+                    tool_input: HookToolInput::Custom {
+                        input: "*** Begin Patch".to_string(),
+                    },
+                    duration_ms: 1,
+                    mutating: true,
+                    sandbox: "none".to_string(),
+                    sandbox_policy: "danger-full-access".to_string(),
+                    error_preview: "tool failed".to_string(),
+                },
+            },
+        }
+    }
+
+    fn post_tool_use_success_payload(label: &str) -> HookPayload {
+        HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from(CWD),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::PostToolUseSuccess {
+                event: HookEventPostToolUseSuccess {
+                    turn_id: format!("turn-{label}"),
+                    call_id: format!("call-{label}"),
+                    tool_name: "apply_patch".to_string(),
+                    tool_kind: HookToolKind::Custom,
+                    tool_input: HookToolInput::Custom {
+                        input: "*** Begin Patch".to_string(),
+                    },
+                    duration_ms: 1,
+                    mutating: true,
+                    sandbox: "none".to_string(),
+                    sandbox_policy: "danger-full-access".to_string(),
+                    output_preview: "ok".to_string(),
+                },
+            },
+        }
+    }
+
     #[test]
     fn command_from_argv_returns_none_for_empty_args() {
         assert!(command_from_argv(&[]).is_none());
@@ -231,24 +687,165 @@ mod tests {
         assert!(
             Hooks::new(HooksConfig {
                 legacy_notify_argv: Some(vec![]),
+                ..HooksConfig::default()
             })
             .after_agent
             .is_empty()
         );
         assert!(
             Hooks::new(HooksConfig {
-                legacy_notify_argv: Some(vec!["".to_string()]),
+                legacy_notify_argv: Some(vec![vec!["".to_string()]]),
+                ..HooksConfig::default()
             })
             .after_agent
             .is_empty()
         );
         assert_eq!(
             Hooks::new(HooksConfig {
-                legacy_notify_argv: Some(vec!["notify-send".to_string()]),
+                legacy_notify_argv: Some(vec![vec!["notify-send".to_string()]]),
+                ..HooksConfig::default()
             })
             .after_agent
             .len(),
             1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                after_user_prompt_submit_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .after_user_prompt_submit
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                after_tool_use_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .after_tool_use
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                before_model_request_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .before_model_request
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                after_model_response_created_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .after_model_response_created
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                turn_started_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .turn_started
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                turn_completed_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .turn_completed
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                turn_aborted_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .turn_aborted
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                session_start_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .session_start
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                session_shutdown_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .session_shutdown
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                compaction_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .compaction
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                pre_tool_use_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .pre_tool_use
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                tool_failure_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .tool_failure
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                post_tool_use_success_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .post_tool_use_success
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                after_model_response_completed_argv: Some(vec![vec!["python3".to_string()]]),
+                ..HooksConfig::default()
+            })
+            .after_model_response_completed
+            .len(),
+            1
+        );
+        assert_eq!(
+            Hooks::new(HooksConfig {
+                after_tool_use_argv: Some(vec![
+                    vec!["python3".to_string(), "/tmp/a.py".to_string()],
+                    vec!["python3".to_string(), "/tmp/b.py".to_string()],
+                ]),
+                ..HooksConfig::default()
+            })
+            .after_tool_use
+            .len(),
+            2
         );
     }
 
@@ -322,6 +919,180 @@ mod tests {
         };
 
         let outcomes = hooks.dispatch(after_tool_use_payload("p")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_after_user_prompt_submit_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            after_user_prompt_submit: vec![counting_success_hook(&calls, "counting")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(after_user_prompt_submit_payload("u")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_after_model_response_completed_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            after_model_response_completed: vec![counting_success_hook(&calls, "counting")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks
+            .dispatch(after_model_response_completed_payload("m"))
+            .await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_before_model_request_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            before_model_request: vec![counting_success_hook(&calls, "counting")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(before_model_request_payload("b")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_after_model_response_created_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            after_model_response_created: vec![counting_success_hook(&calls, "counting")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks
+            .dispatch(after_model_response_created_payload("c"))
+            .await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_turn_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            turn_started: vec![counting_success_hook(&calls, "started")],
+            turn_completed: vec![counting_success_hook(&calls, "completed")],
+            turn_aborted: vec![counting_success_hook(&calls, "aborted")],
+            ..Hooks::default()
+        };
+
+        let started = hooks.dispatch(turn_started_payload("s")).await;
+        assert_eq!(started.len(), 1);
+        assert_eq!(started[0].hook_name, "started");
+        assert!(matches!(started[0].result, HookResult::Success));
+
+        let completed = hooks.dispatch(turn_completed_payload("c")).await;
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].hook_name, "completed");
+        assert!(matches!(completed[0].result, HookResult::Success));
+
+        let aborted = hooks.dispatch(turn_aborted_payload("a")).await;
+        assert_eq!(aborted.len(), 1);
+        assert_eq!(aborted[0].hook_name, "aborted");
+        assert!(matches!(aborted[0].result, HookResult::Success));
+
+        assert_eq!(calls.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_session_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            session_start: vec![counting_success_hook(&calls, "start")],
+            session_shutdown: vec![counting_success_hook(&calls, "shutdown")],
+            ..Hooks::default()
+        };
+
+        let start = hooks.dispatch(session_start_payload()).await;
+        assert_eq!(start.len(), 1);
+        assert_eq!(start[0].hook_name, "start");
+        assert!(matches!(start[0].result, HookResult::Success));
+
+        let shutdown = hooks.dispatch(session_shutdown_payload()).await;
+        assert_eq!(shutdown.len(), 1);
+        assert_eq!(shutdown[0].hook_name, "shutdown");
+        assert!(matches!(shutdown[0].result, HookResult::Success));
+
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_compaction_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            compaction: vec![counting_success_hook(&calls, "compaction")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(compaction_payload("cmp")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "compaction");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_pre_tool_use_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            pre_tool_use: vec![counting_success_hook(&calls, "counting")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(pre_tool_use_payload("pre")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_tool_failure_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            tool_failure: vec![counting_success_hook(&calls, "counting")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(tool_failure_payload("fail")).await;
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "counting");
+        assert!(matches!(outcomes[0].result, HookResult::Success));
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+    }
+
+    #[tokio::test]
+    async fn dispatch_executes_post_tool_use_success_hooks() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let hooks = Hooks {
+            post_tool_use_success: vec![counting_success_hook(&calls, "counting")],
+            ..Hooks::default()
+        };
+
+        let outcomes = hooks.dispatch(post_tool_use_success_payload("post")).await;
         assert_eq!(outcomes.len(), 1);
         assert_eq!(outcomes[0].hook_name, "counting");
         assert!(matches!(outcomes[0].result, HookResult::Success));

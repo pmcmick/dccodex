@@ -2333,6 +2333,34 @@ async fn plan_implementation_popup_yes_emits_submit_message_event() {
 }
 
 #[tokio::test]
+async fn plan_implementation_popup_refine_emits_no_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv();
+    assert!(matches!(event, Err(TryRecvError::Empty)));
+}
+
+#[tokio::test]
+async fn plan_implementation_popup_exit_emits_mode_switch_event() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.open_plan_implementation_prompt();
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+    chat.handle_key_event(KeyEvent::from(KeyCode::Down));
+
+    chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
+
+    let event = rx.try_recv().expect("expected AppEvent");
+    let AppEvent::UpdateCollaborationMode(collaboration_mode) = event else {
+        panic!("expected UpdateCollaborationMode, got {event:?}");
+    };
+    assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+}
+
+#[tokio::test]
 async fn submit_user_message_with_mode_sets_coding_collaboration_mode() {
     let (mut chat, _rx, mut op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
     chat.thread_id = Some(ThreadId::new());
@@ -5827,6 +5855,38 @@ async fn slash_rollout_handles_missing_path() {
         rendered.contains("not available"),
         "expected missing rollout path message: {rendered}"
     );
+}
+
+#[tokio::test]
+async fn slash_hooks_displays_empty_output() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+
+    chat.dispatch_command(SlashCommand::Hooks);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one hooks output cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_snapshot!("slash_hooks_empty_output", rendered);
+}
+
+#[tokio::test]
+async fn slash_hooks_displays_configured_hooks() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(None).await;
+    chat.config.notify = Some(vec![vec![
+        "python3".to_string(),
+        "/tmp/after-agent.py".to_string(),
+    ]]);
+    chat.config.notify_on_pre_tool_use = Some(vec![
+        vec!["python3".to_string(), "/tmp/pre-tool.py".to_string()],
+        vec!["python3".to_string(), "/tmp/pre-tool-2.py".to_string()],
+    ]);
+
+    chat.dispatch_command(SlashCommand::Hooks);
+
+    let cells = drain_insert_history(&mut rx);
+    assert_eq!(cells.len(), 1, "expected one hooks output cell");
+    let rendered = lines_to_single_string(&cells[0]);
+    assert_snapshot!("slash_hooks_configured_output", rendered);
 }
 
 #[tokio::test]

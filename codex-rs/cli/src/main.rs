@@ -38,10 +38,12 @@ use supports_color::Stream;
 mod app_cmd;
 #[cfg(target_os = "macos")]
 mod desktop_app;
+mod hooks_cmd;
 mod mcp_cmd;
 #[cfg(not(windows))]
 mod wsl_paths;
 
+use crate::hooks_cmd::HooksCli;
 use crate::mcp_cmd::McpCli;
 
 use codex_core::config::Config;
@@ -98,6 +100,9 @@ enum Subcommand {
 
     /// Manage external MCP servers for Codex.
     Mcp(McpCli),
+
+    /// List configured hooks.
+    Hooks(HooksCli),
 
     /// Start Codex as an MCP server (stdio).
     McpServer,
@@ -601,6 +606,13 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             // Propagate any root-level config overrides (e.g. `-c key=value`).
             prepend_config_flags(&mut mcp_cli.config_overrides, root_config_overrides.clone());
             mcp_cli.run().await?;
+        }
+        Some(Subcommand::Hooks(mut hooks_cli)) => {
+            prepend_config_flags(
+                &mut hooks_cli.config_overrides,
+                root_config_overrides.clone(),
+            );
+            hooks_cli.run().await?;
         }
         Some(Subcommand::AppServer(app_server_cli)) => match app_server_cli.subcommand {
             None => {
@@ -1200,6 +1212,16 @@ mod tests {
         );
         assert_eq!(args.session_id.as_deref(), Some("session-123"));
         assert_eq!(args.prompt.as_deref(), Some("re-review"));
+    }
+
+    #[test]
+    fn hooks_subcommand_parses_json_flag() {
+        let cli = MultitoolCli::try_parse_from(["codex", "hooks", "--json"])
+            .expect("hooks parse should succeed");
+        let Some(Subcommand::Hooks(hooks)) = cli.subcommand else {
+            panic!("expected hooks subcommand");
+        };
+        assert!(hooks.json);
     }
 
     fn app_server_from_args(args: &[&str]) -> AppServerCommand {

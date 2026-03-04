@@ -1713,6 +1713,48 @@ pub(crate) fn empty_mcp_output() -> PlainHistoryCell {
     PlainHistoryCell { lines }
 }
 
+pub(crate) fn new_hooks_output(config: &Config) -> PlainHistoryCell {
+    let mut lines: Vec<Line<'static>> = vec![
+        "/hooks".magenta().into(),
+        "".into(),
+        vec!["🪝  ".into(), "Hooks".bold()].into(),
+        "".into(),
+    ];
+    let entries = config.configured_hook_command_entries();
+    if entries.is_empty() {
+        lines.push("  • No hooks configured.".italic().into());
+        lines.push(
+            "  • Add `notify`/`notify_on_*` keys in config.toml."
+                .dim()
+                .into(),
+        );
+        return PlainHistoryCell { lines };
+    }
+
+    for entry in entries {
+        lines.push(
+            vec![
+                "  • ".into(),
+                entry.event_type.to_string().cyan(),
+                " ".into(),
+                format!("({})", entry.config_key).dim(),
+            ]
+            .into(),
+        );
+        for (index, command) in entry.commands.iter().enumerate() {
+            lines.push(
+                vec![
+                    format!("    {}. ", index + 1).dim(),
+                    command.join(" ").into(),
+                ]
+                .into(),
+            );
+        }
+    }
+
+    PlainHistoryCell { lines }
+}
+
 /// Render MCP tools grouped by connection using the fully-qualified tool names.
 pub(crate) fn new_mcp_tools_output(
     config: &Config,

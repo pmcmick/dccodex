@@ -41,6 +41,7 @@ pub enum SlashCommand {
     Statusline,
     Theme,
     Mcp,
+    Hooks,
     Apps,
     Logout,
     Quit,
@@ -105,6 +106,7 @@ impl SlashCommand {
             }
             SlashCommand::Experimental => "toggle experimental features",
             SlashCommand::Mcp => "list configured MCP tools",
+            SlashCommand::Hooks => "list configured hooks",
             SlashCommand::Apps => "manage apps",
             SlashCommand::Logout => "log out of Codex",
             SlashCommand::Rollout => "print the rollout file path",
@@ -163,6 +165,7 @@ impl SlashCommand {
             | SlashCommand::Ps
             | SlashCommand::Clean
             | SlashCommand::Mcp
+            | SlashCommand::Hooks
             | SlashCommand::Apps
             | SlashCommand::Feedback
             | SlashCommand::Quit

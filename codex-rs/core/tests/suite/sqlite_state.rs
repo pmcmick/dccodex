@@ -278,6 +278,8 @@ async fn user_messages_persist_in_state_db() -> Result<()> {
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn web_search_marks_thread_memory_mode_polluted_when_configured() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
     let server = start_mock_server().await;
     mount_sse_sequence(
         &server,

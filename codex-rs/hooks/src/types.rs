@@ -5,7 +5,10 @@ use chrono::DateTime;
 use chrono::SecondsFormat;
 use chrono::Utc;
 use codex_protocol::ThreadId;
+use codex_protocol::config_types::ModeKind;
 use codex_protocol::models::SandboxPermissions;
+use codex_protocol::protocol::TokenUsage;
+use codex_protocol::protocol::TurnAbortReason;
 use futures::future::BoxFuture;
 use serde::Serialize;
 use serde::Serializer;
@@ -16,6 +19,18 @@ pub type HookFn = Arc<dyn for<'a> Fn(&'a HookPayload) -> BoxFuture<'a, HookResul
 pub enum HookResult {
     /// Success: hook completed successfully.
     Success,
+    /// SuccessWithAppendedUserPrompt: hook completed successfully and returned
+    /// extra text to append to the user prompt before sampling.
+    SuccessWithAppendedUserPrompt(String),
+    /// SuccessWithPromptAugmentation: hook completed successfully and returned
+    /// optional prompt augmentation actions for the submitted user prompt.
+    SuccessWithPromptAugmentation {
+        append_prompt_text: Option<String>,
+        switch_to_plan_mode: bool,
+    },
+    /// SuccessWithPreToolUseDecision: pre_tool_use hook completed successfully
+    /// and returned a tool dispatch decision.
+    SuccessWithPreToolUseDecision(HookPreToolUseDecision),
     /// FailedContinue: hook failed, but other subsequent hooks should still execute and the
     /// operation should continue.
     FailedContinue(Box<dyn std::error::Error + Send + Sync + 'static>),
@@ -24,9 +39,36 @@ pub enum HookResult {
     FailedAbort(Box<dyn std::error::Error + Send + Sync + 'static>),
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookPreToolUseDecision {
+    Deny { message: String },
+    Replace { output: String, success: bool },
+}
+
 impl HookResult {
     pub fn should_abort_operation(&self) -> bool {
         matches!(self, Self::FailedAbort(_))
+    }
+
+    pub fn appended_user_prompt(&self) -> Option<&str> {
+        match self {
+            Self::SuccessWithAppendedUserPrompt(text) => Some(text),
+            Self::SuccessWithPromptAugmentation {
+                append_prompt_text: Some(text),
+                ..
+            } => Some(text),
+            _ => None,
+        }
+    }
+
+    pub fn switch_to_plan_mode(&self) -> bool {
+        match self {
+            Self::SuccessWithPromptAugmentation {
+                switch_to_plan_mode,
+                ..
+            } => *switch_to_plan_mode,
+            _ => false,
+        }
     }
 }
 
@@ -79,6 +121,123 @@ pub struct HookEventAfterAgent {
     pub turn_id: String,
     pub input_messages: Vec<String>,
     pub last_assistant_message: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_plan: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventAfterUserPromptSubmit {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub input_messages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventBeforeModelRequest {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub model: String,
+    pub sampling_request_index: u32,
+    pub input_messages: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventAfterModelResponseCreated {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub model: String,
+    pub sampling_request_index: u32,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventAfterModelResponseCompleted {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub response_id: String,
+    pub token_usage: Option<TokenUsage>,
+    pub can_append: bool,
+    pub needs_follow_up: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub proposed_plan: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventTurnStarted {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub model_context_window: Option<i64>,
+    pub collaboration_mode_kind: ModeKind,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventTurnCompleted {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub last_agent_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventTurnAborted {
+    pub thread_id: ThreadId,
+    pub turn_id: Option<String>,
+    pub reason: TurnAbortReason,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventSessionStart {
+    pub thread_id: ThreadId,
+    pub model: String,
+    pub model_provider_id: String,
+    pub cwd: PathBuf,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventSessionShutdown {
+    pub thread_id: ThreadId,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HookCompactionTrigger {
+    Manual,
+    AutoPreTurn,
+    AutoMidTurn,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HookCompactionStrategy {
+    Local,
+    Remote,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum HookCompactionStatus {
+    Started,
+    Completed,
+    Failed,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventCompaction {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub trigger: HookCompactionTrigger,
+    pub strategy: HookCompactionStrategy,
+    pub status: HookCompactionStatus,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -137,6 +296,49 @@ pub struct HookEventAfterToolUse {
     pub output_preview: String,
 }
 
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventPreToolUse {
+    pub turn_id: String,
+    pub call_id: String,
+    pub tool_name: String,
+    pub tool_kind: HookToolKind,
+    pub tool_input: HookToolInput,
+    pub mutating: bool,
+    pub sandbox: String,
+    pub sandbox_policy: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventToolFailure {
+    pub turn_id: String,
+    pub call_id: String,
+    pub tool_name: String,
+    pub tool_kind: HookToolKind,
+    pub tool_input: HookToolInput,
+    pub duration_ms: u64,
+    pub mutating: bool,
+    pub sandbox: String,
+    pub sandbox_policy: String,
+    pub error_preview: String,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventPostToolUseSuccess {
+    pub turn_id: String,
+    pub call_id: String,
+    pub tool_name: String,
+    pub tool_kind: HookToolKind,
+    pub tool_input: HookToolInput,
+    pub duration_ms: u64,
+    pub mutating: bool,
+    pub sandbox: String,
+    pub sandbox_policy: String,
+    pub output_preview: String,
+}
+
 fn serialize_triggered_at<S>(value: &DateTime<Utc>, serializer: S) -> Result<S::Ok, S::Error>
 where
     S: Serializer,
@@ -151,9 +353,61 @@ pub enum HookEvent {
         #[serde(flatten)]
         event: HookEventAfterAgent,
     },
+    AfterUserPromptSubmit {
+        #[serde(flatten)]
+        event: HookEventAfterUserPromptSubmit,
+    },
+    BeforeModelRequest {
+        #[serde(flatten)]
+        event: HookEventBeforeModelRequest,
+    },
+    AfterModelResponseCreated {
+        #[serde(flatten)]
+        event: HookEventAfterModelResponseCreated,
+    },
+    TurnStarted {
+        #[serde(flatten)]
+        event: HookEventTurnStarted,
+    },
+    TurnCompleted {
+        #[serde(flatten)]
+        event: HookEventTurnCompleted,
+    },
+    TurnAborted {
+        #[serde(flatten)]
+        event: HookEventTurnAborted,
+    },
+    SessionStart {
+        #[serde(flatten)]
+        event: HookEventSessionStart,
+    },
+    SessionShutdown {
+        #[serde(flatten)]
+        event: HookEventSessionShutdown,
+    },
+    Compaction {
+        #[serde(flatten)]
+        event: HookEventCompaction,
+    },
     AfterToolUse {
         #[serde(flatten)]
         event: HookEventAfterToolUse,
+    },
+    PreToolUse {
+        #[serde(flatten)]
+        event: HookEventPreToolUse,
+    },
+    ToolFailure {
+        #[serde(flatten)]
+        event: HookEventToolFailure,
+    },
+    PostToolUseSuccess {
+        #[serde(flatten)]
+        event: HookEventPostToolUseSuccess,
+    },
+    AfterModelResponseCompleted {
+        #[serde(flatten)]
+        event: HookEventAfterModelResponseCompleted,
     },
 }
 
@@ -168,9 +422,22 @@ mod tests {
     use pretty_assertions::assert_eq;
     use serde_json::json;
 
+    use super::HookCompactionStatus;
+    use super::HookCompactionStrategy;
+    use super::HookCompactionTrigger;
     use super::HookEvent;
     use super::HookEventAfterAgent;
+    use super::HookEventAfterModelResponseCompleted;
+    use super::HookEventAfterModelResponseCreated;
     use super::HookEventAfterToolUse;
+    use super::HookEventAfterUserPromptSubmit;
+    use super::HookEventBeforeModelRequest;
+    use super::HookEventCompaction;
+    use super::HookEventPostToolUseSuccess;
+    use super::HookEventPreToolUse;
+    use super::HookEventSessionStart;
+    use super::HookEventToolFailure;
+    use super::HookEventTurnStarted;
     use super::HookPayload;
     use super::HookToolInput;
     use super::HookToolInputLocalShell;
@@ -194,6 +461,7 @@ mod tests {
                     turn_id: "turn-1".to_string(),
                     input_messages: vec!["hello".to_string()],
                     last_assistant_message: Some("hi".to_string()),
+                    proposed_plan: None,
                 },
             },
         };
@@ -209,6 +477,245 @@ mod tests {
                 "turn_id": "turn-1",
                 "input_messages": ["hello"],
                 "last_assistant_message": "hi",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn after_user_prompt_submit_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: Some("codex-app-server".to_string()),
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::AfterUserPromptSubmit {
+                event: HookEventAfterUserPromptSubmit {
+                    thread_id,
+                    turn_id: "turn-2".to_string(),
+                    input_messages: vec!["hello".to_string(), "world".to_string()],
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "client": "codex-app-server",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "after_user_prompt_submit",
+                "thread_id": thread_id.to_string(),
+                "turn_id": "turn-2",
+                "input_messages": ["hello", "world"],
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn before_model_request_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::BeforeModelRequest {
+                event: HookEventBeforeModelRequest {
+                    thread_id,
+                    turn_id: "turn-3".to_string(),
+                    model: "gpt-5-codex".to_string(),
+                    sampling_request_index: 2,
+                    input_messages: vec!["hello".to_string(), "world".to_string()],
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "before_model_request",
+                "thread_id": thread_id.to_string(),
+                "turn_id": "turn-3",
+                "model": "gpt-5-codex",
+                "sampling_request_index": 2,
+                "input_messages": ["hello", "world"],
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn after_model_response_created_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::AfterModelResponseCreated {
+                event: HookEventAfterModelResponseCreated {
+                    thread_id,
+                    turn_id: "turn-3".to_string(),
+                    model: "gpt-5-codex".to_string(),
+                    sampling_request_index: 2,
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "after_model_response_created",
+                "thread_id": thread_id.to_string(),
+                "turn_id": "turn-3",
+                "model": "gpt-5-codex",
+                "sampling_request_index": 2,
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn turn_started_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::TurnStarted {
+                event: HookEventTurnStarted {
+                    thread_id,
+                    turn_id: "turn-10".to_string(),
+                    model_context_window: Some(200_000),
+                    collaboration_mode_kind: codex_protocol::config_types::ModeKind::Default,
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "turn_started",
+                "thread_id": thread_id.to_string(),
+                "turn_id": "turn-10",
+                "model_context_window": 200000,
+                "collaboration_mode_kind": "default",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn session_start_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::SessionStart {
+                event: HookEventSessionStart {
+                    thread_id,
+                    model: "gpt-5-codex".to_string(),
+                    model_provider_id: "openai".to_string(),
+                    cwd: PathBuf::from("/repo"),
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "session_start",
+                "thread_id": thread_id.to_string(),
+                "model": "gpt-5-codex",
+                "model_provider_id": "openai",
+                "cwd": "/repo",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn compaction_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::Compaction {
+                event: HookEventCompaction {
+                    thread_id,
+                    turn_id: "turn-11".to_string(),
+                    trigger: HookCompactionTrigger::AutoPreTurn,
+                    strategy: HookCompactionStrategy::Remote,
+                    status: HookCompactionStatus::Failed,
+                    error: Some("context window exceeded".to_string()),
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "compaction",
+                "thread_id": thread_id.to_string(),
+                "turn_id": "turn-11",
+                "trigger": "auto_pre_turn",
+                "strategy": "remote",
+                "status": "failed",
+                "error": "context window exceeded",
             },
         });
 
@@ -277,6 +784,310 @@ mod tests {
                 },
                 "executed": true,
                 "success": true,
+                "duration_ms": 42,
+                "mutating": true,
+                "sandbox": "none",
+                "sandbox_policy": "danger-full-access",
+                "output_preview": "ok",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn after_model_response_completed_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::AfterModelResponseCompleted {
+                event: HookEventAfterModelResponseCompleted {
+                    thread_id,
+                    turn_id: "turn-3".to_string(),
+                    response_id: "resp-1".to_string(),
+                    token_usage: Some(codex_protocol::protocol::TokenUsage {
+                        input_tokens: 10,
+                        cached_input_tokens: 2,
+                        output_tokens: 4,
+                        reasoning_output_tokens: 1,
+                        total_tokens: 14,
+                    }),
+                    can_append: true,
+                    needs_follow_up: false,
+                    proposed_plan: None,
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "after_model_response_completed",
+                "thread_id": thread_id.to_string(),
+                "turn_id": "turn-3",
+                "response_id": "resp-1",
+                "token_usage": {
+                    "input_tokens": 10,
+                    "cached_input_tokens": 2,
+                    "output_tokens": 4,
+                    "reasoning_output_tokens": 1,
+                    "total_tokens": 14,
+                },
+                "can_append": true,
+                "needs_follow_up": false,
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn after_model_response_completed_payload_serializes_proposed_plan() {
+        let session_id = ThreadId::new();
+        let thread_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::AfterModelResponseCompleted {
+                event: HookEventAfterModelResponseCompleted {
+                    thread_id,
+                    turn_id: "turn-3".to_string(),
+                    response_id: "resp-1".to_string(),
+                    token_usage: None,
+                    can_append: false,
+                    needs_follow_up: false,
+                    proposed_plan: Some("- Step 1\n- Step 2".to_string()),
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "after_model_response_completed",
+                "thread_id": thread_id.to_string(),
+                "turn_id": "turn-3",
+                "response_id": "resp-1",
+                "token_usage": null,
+                "can_append": false,
+                "needs_follow_up": false,
+                "proposed_plan": "- Step 1\n- Step 2",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn pre_tool_use_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::PreToolUse {
+                event: HookEventPreToolUse {
+                    turn_id: "turn-2".to_string(),
+                    call_id: "call-1".to_string(),
+                    tool_name: "local_shell".to_string(),
+                    tool_kind: HookToolKind::LocalShell,
+                    tool_input: HookToolInput::LocalShell {
+                        params: HookToolInputLocalShell {
+                            command: vec!["cargo".to_string(), "fmt".to_string()],
+                            workdir: Some("codex-rs".to_string()),
+                            timeout_ms: Some(60_000),
+                            sandbox_permissions: Some(SandboxPermissions::UseDefault),
+                            justification: None,
+                            prefix_rule: None,
+                        },
+                    },
+                    mutating: true,
+                    sandbox: "none".to_string(),
+                    sandbox_policy: "danger-full-access".to_string(),
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "pre_tool_use",
+                "turn_id": "turn-2",
+                "call_id": "call-1",
+                "tool_name": "local_shell",
+                "tool_kind": "local_shell",
+                "tool_input": {
+                    "input_type": "local_shell",
+                    "params": {
+                        "command": ["cargo", "fmt"],
+                        "workdir": "codex-rs",
+                        "timeout_ms": 60000,
+                        "sandbox_permissions": "use_default",
+                        "justification": null,
+                        "prefix_rule": null,
+                    },
+                },
+                "mutating": true,
+                "sandbox": "none",
+                "sandbox_policy": "danger-full-access",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn tool_failure_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::ToolFailure {
+                event: HookEventToolFailure {
+                    turn_id: "turn-2".to_string(),
+                    call_id: "call-1".to_string(),
+                    tool_name: "local_shell".to_string(),
+                    tool_kind: HookToolKind::LocalShell,
+                    tool_input: HookToolInput::LocalShell {
+                        params: HookToolInputLocalShell {
+                            command: vec!["cargo".to_string(), "fmt".to_string()],
+                            workdir: Some("codex-rs".to_string()),
+                            timeout_ms: Some(60_000),
+                            sandbox_permissions: Some(SandboxPermissions::UseDefault),
+                            justification: None,
+                            prefix_rule: None,
+                        },
+                    },
+                    duration_ms: 42,
+                    mutating: true,
+                    sandbox: "none".to_string(),
+                    sandbox_policy: "danger-full-access".to_string(),
+                    error_preview: "tool failed".to_string(),
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "tool_failure",
+                "turn_id": "turn-2",
+                "call_id": "call-1",
+                "tool_name": "local_shell",
+                "tool_kind": "local_shell",
+                "tool_input": {
+                    "input_type": "local_shell",
+                    "params": {
+                        "command": ["cargo", "fmt"],
+                        "workdir": "codex-rs",
+                        "timeout_ms": 60000,
+                        "sandbox_permissions": "use_default",
+                        "justification": null,
+                        "prefix_rule": null,
+                    },
+                },
+                "duration_ms": 42,
+                "mutating": true,
+                "sandbox": "none",
+                "sandbox_policy": "danger-full-access",
+                "error_preview": "tool failed",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn post_tool_use_success_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: None,
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::PostToolUseSuccess {
+                event: HookEventPostToolUseSuccess {
+                    turn_id: "turn-2".to_string(),
+                    call_id: "call-1".to_string(),
+                    tool_name: "local_shell".to_string(),
+                    tool_kind: HookToolKind::LocalShell,
+                    tool_input: HookToolInput::LocalShell {
+                        params: HookToolInputLocalShell {
+                            command: vec!["cargo".to_string(), "fmt".to_string()],
+                            workdir: Some("codex-rs".to_string()),
+                            timeout_ms: Some(60_000),
+                            sandbox_permissions: Some(SandboxPermissions::UseDefault),
+                            justification: None,
+                            prefix_rule: None,
+                        },
+                    },
+                    duration_ms: 42,
+                    mutating: true,
+                    sandbox: "none".to_string(),
+                    sandbox_policy: "danger-full-access".to_string(),
+                    output_preview: "ok".to_string(),
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "post_tool_use_success",
+                "turn_id": "turn-2",
+                "call_id": "call-1",
+                "tool_name": "local_shell",
+                "tool_kind": "local_shell",
+                "tool_input": {
+                    "input_type": "local_shell",
+                    "params": {
+                        "command": ["cargo", "fmt"],
+                        "workdir": "codex-rs",
+                        "timeout_ms": 60000,
+                        "sandbox_permissions": "use_default",
+                        "justification": null,
+                        "prefix_rule": null,
+                    },
+                },
                 "duration_ms": 42,
                 "mutating": true,
                 "sandbox": "none",

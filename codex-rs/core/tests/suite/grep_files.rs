@@ -1,7 +1,11 @@
 #![cfg(not(target_os = "windows"))]
 
 use anyhow::Result;
+use codex_core::CodexAuth;
+use codex_core::models_manager::manager::RefreshStrategy;
+use codex_protocol::openai_models::ModelsResponse;
 use core_test_support::responses::mount_function_call_agent_response;
+use core_test_support::responses::mount_models_once;
 use core_test_support::responses::start_mock_server;
 use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
@@ -126,8 +130,40 @@ async fn grep_files_tool_reports_empty_results() -> Result<()> {
 
 #[allow(clippy::expect_used)]
 async fn build_test_codex(server: &wiremock::MockServer) -> Result<TestCodex> {
-    let mut builder = test_codex().with_model(MODEL_WITH_TOOL);
-    builder.build(server).await
+    let bundled_models: ModelsResponse = serde_json::from_str(include_str!("../../models.json"))
+        .expect("bundled models.json should deserialize");
+    let mut model = bundled_models
+        .models
+        .first()
+        .expect("bundled models.json should include at least one model")
+        .clone();
+    model.slug = MODEL_WITH_TOOL.to_string();
+    model.display_name = "Grep Files Test Model".to_string();
+    model.experimental_supported_tools = vec!["grep_files".to_string()];
+    let _models_mock = mount_models_once(
+        server,
+        ModelsResponse {
+            models: vec![model],
+        },
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_auth(CodexAuth::create_dummy_chatgpt_auth_for_testing())
+        .with_model(MODEL_WITH_TOOL);
+    let test = builder.build(server).await?;
+    let available_models = test
+        .thread_manager
+        .get_models_manager()
+        .list_models(RefreshStrategy::Online)
+        .await;
+    assert!(
+        available_models
+            .iter()
+            .any(|model| model.model == MODEL_WITH_TOOL),
+        "expected /models refresh to include {MODEL_WITH_TOOL}, got {available_models:?}"
+    );
+    Ok(test)
 }
 
 fn collect_file_names(content: &str) -> HashSet<String> {
