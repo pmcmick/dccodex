@@ -141,15 +141,22 @@ async fn python_multiprocessing_lock_works_under_sandbox() {
     };
 
     let python_code = r#"import multiprocessing
-from multiprocessing import Lock, Process
 
 def f(lock):
     with lock:
         print("Lock acquired in child process")
 
 if __name__ == '__main__':
-    lock = Lock()
-    p = Process(target=f, args=(lock,))
+    # Python 3.14 may default to a start method that relies on
+    # resource_tracker behavior that is fragile under strict sandboxing.
+    # Prefer fork when available so this test remains focused on semaphore
+    # filesystem access under the sandbox.
+    if "fork" in multiprocessing.get_all_start_methods():
+        ctx = multiprocessing.get_context("fork")
+    else:
+        ctx = multiprocessing.get_context()
+    lock = ctx.Lock()
+    p = ctx.Process(target=f, args=(lock,))
     p.start()
     p.join()
 "#;
