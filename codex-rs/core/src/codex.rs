@@ -7393,7 +7393,6 @@ async fn try_run_sampling_request(
             ResponseEvent::Completed {
                 response_id,
                 token_usage,
-                can_append,
             } => {
                 flush_assistant_text_segments_all(
                     &sess,
@@ -7420,7 +7419,6 @@ async fn try_run_sampling_request(
                                 turn_id: turn_context.sub_id.clone(),
                                 response_id,
                                 token_usage: token_usage.clone(),
-                                can_append,
                                 needs_follow_up,
                                 proposed_plan: proposed_plan.clone(),
                             },
@@ -7431,7 +7429,6 @@ async fn try_run_sampling_request(
                     turn_id = %turn_context.sub_id,
                     hook_event = "after_model_response_completed",
                     hooks_executed = hook_outcomes.len(),
-                    can_append,
                     needs_follow_up,
                     "hook dispatch completed"
                 );

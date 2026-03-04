@@ -50,7 +50,6 @@ def build_record(payload: dict[str, Any]) -> dict[str, Any] | None:
         "response_id": event.get("response_id"),
         "client": payload.get("client"),
         "cwd": payload.get("cwd"),
-        "can_append": bool(event.get("can_append", False)),
         "needs_follow_up": bool(event.get("needs_follow_up", False)),
         "input_tokens": input_tokens,
         "cached_input_tokens": cached_input_tokens,

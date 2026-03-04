@@ -407,7 +407,6 @@ mod tests {
                     turn_id: format!("turn-{label}"),
                     response_id: format!("resp-{label}"),
                     token_usage: None,
-                    can_append: false,
                     needs_follow_up: false,
                     proposed_plan: None,
                 },
