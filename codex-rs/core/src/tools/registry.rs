@@ -9,19 +9,26 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
+use codex_hooks::HookEventPostToolUseSuccess;
+use codex_hooks::HookEventPreToolUse;
+use codex_hooks::HookEventToolFailure;
 use codex_hooks::HookPayload;
+use codex_hooks::HookPreToolUseDecision;
+use codex_hooks::HookResponse;
 use codex_hooks::HookResult;
 use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
 use codex_utils_readiness::Readiness;
+use tracing::debug;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -229,6 +236,96 @@ impl ToolRegistry {
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
+        let tool_input = HookToolInput::from(&invocation.payload);
+        let hook_context = ToolHookContext {
+            turn_id: invocation.turn.sub_id.clone(),
+            call_id: invocation.call_id.clone(),
+            tool_name: invocation.tool_name.clone(),
+            tool_input,
+            mutating: is_mutating,
+            sandbox: sandbox_tag(
+                &invocation.turn.sandbox_policy,
+                invocation.turn.windows_sandbox_level,
+                invocation
+                    .turn
+                    .features
+                    .enabled(Feature::UseLinuxSandboxBwrap),
+            )
+            .to_string(),
+            sandbox_policy: sandbox_policy_tag(&invocation.turn.sandbox_policy).to_string(),
+        };
+        if let Some(short_circuit) = dispatch_pre_tool_use_hook(&invocation, &hook_context).await? {
+            let hook_abort_error = dispatch_tool_hook_event(
+                &invocation,
+                "after_tool_use",
+                HookEvent::AfterToolUse {
+                    event: HookEventAfterToolUse {
+                        turn_id: hook_context.turn_id.clone(),
+                        call_id: hook_context.call_id.clone(),
+                        tool_name: hook_context.tool_name.clone(),
+                        tool_kind: hook_context.tool_kind(),
+                        tool_input: hook_context.tool_input.clone(),
+                        executed: false,
+                        success: short_circuit.success,
+                        duration_ms: 0,
+                        mutating: hook_context.mutating,
+                        sandbox: hook_context.sandbox.clone(),
+                        sandbox_policy: hook_context.sandbox_policy.clone(),
+                        output_preview: short_circuit.output_preview.clone(),
+                    },
+                },
+            )
+            .await;
+            if let Some(err) = hook_abort_error {
+                return Err(err);
+            }
+            if short_circuit.success {
+                if let Some(err) = dispatch_tool_hook_event(
+                    &invocation,
+                    "post_tool_use_success",
+                    HookEvent::PostToolUseSuccess {
+                        event: HookEventPostToolUseSuccess {
+                            turn_id: hook_context.turn_id.clone(),
+                            call_id: hook_context.call_id.clone(),
+                            tool_name: hook_context.tool_name.clone(),
+                            tool_kind: hook_context.tool_kind(),
+                            tool_input: hook_context.tool_input.clone(),
+                            duration_ms: 0,
+                            mutating: hook_context.mutating,
+                            sandbox: hook_context.sandbox.clone(),
+                            sandbox_policy: hook_context.sandbox_policy.clone(),
+                            output_preview: short_circuit.output_preview,
+                        },
+                    },
+                )
+                .await
+                {
+                    return Err(err);
+                }
+            } else if let Some(err) = dispatch_tool_hook_event(
+                &invocation,
+                "tool_failure",
+                HookEvent::ToolFailure {
+                    event: HookEventToolFailure {
+                        turn_id: hook_context.turn_id.clone(),
+                        call_id: hook_context.call_id.clone(),
+                        tool_name: hook_context.tool_name.clone(),
+                        tool_kind: hook_context.tool_kind(),
+                        tool_input: hook_context.tool_input.clone(),
+                        duration_ms: 0,
+                        mutating: hook_context.mutating,
+                        sandbox: hook_context.sandbox.clone(),
+                        sandbox_policy: hook_context.sandbox_policy.clone(),
+                        error_preview: short_circuit.output_preview,
+                    },
+                },
+            )
+            .await
+            {
+                return Err(err);
+            }
+            return Ok(short_circuit.result);
+        }
         let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
 
@@ -270,17 +367,75 @@ impl ToolRegistry {
             Err(err) => (err.to_string(), false),
         };
         emit_metric_for_tool_read(&invocation, success).await;
-        let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
-            invocation: &invocation,
-            output_preview,
-            success,
-            executed: true,
-            duration,
-            mutating: is_mutating,
-        })
+        let duration_ms = u64::try_from(duration.as_millis()).unwrap_or(u64::MAX);
+        let hook_abort_error = dispatch_tool_hook_event(
+            &invocation,
+            "after_tool_use",
+            HookEvent::AfterToolUse {
+                event: HookEventAfterToolUse {
+                    turn_id: hook_context.turn_id.clone(),
+                    call_id: hook_context.call_id.clone(),
+                    tool_name: hook_context.tool_name.clone(),
+                    tool_kind: hook_context.tool_kind(),
+                    tool_input: hook_context.tool_input.clone(),
+                    executed: true,
+                    success,
+                    duration_ms,
+                    mutating: hook_context.mutating,
+                    sandbox: hook_context.sandbox.clone(),
+                    sandbox_policy: hook_context.sandbox_policy.clone(),
+                    output_preview: output_preview.clone(),
+                },
+            },
+        )
         .await;
 
         if let Some(err) = hook_abort_error {
+            return Err(err);
+        }
+        if success {
+            if let Some(err) = dispatch_tool_hook_event(
+                &invocation,
+                "post_tool_use_success",
+                HookEvent::PostToolUseSuccess {
+                    event: HookEventPostToolUseSuccess {
+                        turn_id: hook_context.turn_id.clone(),
+                        call_id: hook_context.call_id.clone(),
+                        tool_name: hook_context.tool_name.clone(),
+                        tool_kind: hook_context.tool_kind(),
+                        tool_input: hook_context.tool_input.clone(),
+                        duration_ms,
+                        mutating: hook_context.mutating,
+                        sandbox: hook_context.sandbox.clone(),
+                        sandbox_policy: hook_context.sandbox_policy.clone(),
+                        output_preview: output_preview.clone(),
+                    },
+                },
+            )
+            .await
+            {
+                return Err(err);
+            }
+        } else if let Some(err) = dispatch_tool_hook_event(
+            &invocation,
+            "tool_failure",
+            HookEvent::ToolFailure {
+                event: HookEventToolFailure {
+                    turn_id: hook_context.turn_id.clone(),
+                    call_id: hook_context.call_id.clone(),
+                    tool_name: hook_context.tool_name.clone(),
+                    tool_kind: hook_context.tool_kind(),
+                    tool_input: hook_context.tool_input.clone(),
+                    duration_ms,
+                    mutating: hook_context.mutating,
+                    sandbox: hook_context.sandbox.clone(),
+                    sandbox_policy: hook_context.sandbox_policy.clone(),
+                    error_preview: output_preview.clone(),
+                },
+            },
+        )
+        .await
+        {
             return Err(err);
         }
 
@@ -436,22 +591,161 @@ fn hook_tool_kind(tool_input: &HookToolInput) -> HookToolKind {
     }
 }
 
-struct AfterToolUseHookDispatch<'a> {
-    invocation: &'a ToolInvocation,
-    output_preview: String,
-    success: bool,
-    executed: bool,
-    duration: Duration,
+struct ToolHookContext {
+    turn_id: String,
+    call_id: String,
+    tool_name: String,
+    tool_input: HookToolInput,
     mutating: bool,
+    sandbox: String,
+    sandbox_policy: String,
 }
 
-async fn dispatch_after_tool_use_hook(
-    dispatch: AfterToolUseHookDispatch<'_>,
-) -> Option<FunctionCallError> {
-    let AfterToolUseHookDispatch { invocation, .. } = dispatch;
+impl ToolHookContext {
+    fn tool_kind(&self) -> HookToolKind {
+        hook_tool_kind(&self.tool_input)
+    }
+}
+
+struct PreToolHookShortCircuit {
+    result: AnyToolResult,
+    success: bool,
+    output_preview: String,
+}
+
+async fn dispatch_pre_tool_use_hook(
+    invocation: &ToolInvocation,
+    hook_context: &ToolHookContext,
+) -> Result<Option<PreToolHookShortCircuit>, FunctionCallError> {
+    let hook_outcomes = dispatch_tool_hook_payload(
+        invocation,
+        "pre_tool_use",
+        HookEvent::PreToolUse {
+            event: HookEventPreToolUse {
+                turn_id: hook_context.turn_id.clone(),
+                call_id: hook_context.call_id.clone(),
+                tool_name: hook_context.tool_name.clone(),
+                tool_kind: hook_context.tool_kind(),
+                tool_input: hook_context.tool_input.clone(),
+                mutating: hook_context.mutating,
+                sandbox: hook_context.sandbox.clone(),
+                sandbox_policy: hook_context.sandbox_policy.clone(),
+            },
+        },
+    )
+    .await;
+    let turn = invocation.turn.as_ref();
+
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {
+                debug!(
+                    turn_id = %turn.sub_id,
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_event = "pre_tool_use",
+                    hook_name = %hook_name,
+                    "hook completed"
+                );
+            }
+            HookResult::SuccessWithPromptAugmentation {
+                append_prompt_text,
+                switch_to_plan_mode,
+            } => {
+                debug!(
+                    turn_id = %turn.sub_id,
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_event = "pre_tool_use",
+                    hook_name = %hook_name,
+                    switch_to_plan_mode,
+                    appended_prompt_text_present = append_prompt_text.is_some(),
+                    "hook completed with prompt augmentation"
+                );
+            }
+            HookResult::SuccessWithPreToolUseDecision(decision) => match decision {
+                HookPreToolUseDecision::Deny { message } => {
+                    warn!(
+                        turn_id = %turn.sub_id,
+                        call_id = %invocation.call_id,
+                        tool_name = %invocation.tool_name,
+                        hook_event = "pre_tool_use",
+                        hook_name = %hook_name,
+                        "hook denied tool execution"
+                    );
+                    let output = FunctionToolOutput::from_text(message, Some(false));
+                    let output_preview = output.log_preview();
+                    return Ok(Some(PreToolHookShortCircuit {
+                        result: AnyToolResult {
+                            call_id: invocation.call_id.clone(),
+                            payload: invocation.payload.clone(),
+                            result: Box::new(output),
+                        },
+                        success: false,
+                        output_preview,
+                    }));
+                }
+                HookPreToolUseDecision::Replace { output, success } => {
+                    debug!(
+                        turn_id = %turn.sub_id,
+                        call_id = %invocation.call_id,
+                        tool_name = %invocation.tool_name,
+                        hook_event = "pre_tool_use",
+                        hook_name = %hook_name,
+                        replacement_chars = output.len(),
+                        replacement_success = success,
+                        "hook replaced tool execution"
+                    );
+                    let output = FunctionToolOutput::from_text(output, Some(success));
+                    let output_preview = output.log_preview();
+                    return Ok(Some(PreToolHookShortCircuit {
+                        result: AnyToolResult {
+                            call_id: invocation.call_id.clone(),
+                            payload: invocation.payload.clone(),
+                            result: Box::new(output),
+                        },
+                        success,
+                        output_preview,
+                    }));
+                }
+            },
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_event = "pre_tool_use",
+                    hook_name = %hook_name,
+                    error = %error,
+                    "pre_tool_use hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_event = "pre_tool_use",
+                    hook_name = %hook_name,
+                    error = %error,
+                    "pre_tool_use hook failed; aborting operation"
+                );
+                return Err(FunctionCallError::Fatal(format!(
+                    "pre_tool_use hook '{hook_name}' failed and aborted operation: {error}"
+                )));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+async fn dispatch_tool_hook_payload(
+    invocation: &ToolInvocation,
+    hook_event_name: &'static str,
+    hook_event: HookEvent,
+) -> Vec<HookResponse> {
     let session = invocation.session.as_ref();
     let turn = invocation.turn.as_ref();
-    let tool_input = HookToolInput::from(&invocation.payload);
     let hook_outcomes = session
         .hooks()
         .dispatch(HookPayload {
@@ -459,53 +753,88 @@ async fn dispatch_after_tool_use_hook(
             cwd: turn.cwd.clone(),
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
-            hook_event: HookEvent::AfterToolUse {
-                event: HookEventAfterToolUse {
-                    turn_id: turn.sub_id.clone(),
-                    call_id: invocation.call_id.clone(),
-                    tool_name: invocation.tool_name.clone(),
-                    tool_kind: hook_tool_kind(&tool_input),
-                    tool_input,
-                    executed: dispatch.executed,
-                    success: dispatch.success,
-                    duration_ms: u64::try_from(dispatch.duration.as_millis()).unwrap_or(u64::MAX),
-                    mutating: dispatch.mutating,
-                    sandbox: sandbox_tag(
-                        &turn.sandbox_policy,
-                        turn.windows_sandbox_level,
-                        turn.features.enabled(Feature::UseLinuxSandboxBwrap),
-                    )
-                    .to_string(),
-                    sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
-                    output_preview: dispatch.output_preview.clone(),
-                },
-            },
+            hook_event,
         })
         .await;
+    debug!(
+        turn_id = %turn.sub_id,
+        call_id = %invocation.call_id,
+        tool_name = %invocation.tool_name,
+        hook_event = hook_event_name,
+        hooks_executed = hook_outcomes.len(),
+        "hook dispatch completed"
+    );
+    hook_outcomes
+}
+
+async fn dispatch_tool_hook_event(
+    invocation: &ToolInvocation,
+    hook_event_name: &'static str,
+    hook_event: HookEvent,
+) -> Option<FunctionCallError> {
+    let turn = invocation.turn.as_ref();
+    let hook_outcomes = dispatch_tool_hook_payload(invocation, hook_event_name, hook_event).await;
 
     for hook_outcome in hook_outcomes {
         let hook_name = hook_outcome.hook_name;
         match hook_outcome.result {
-            HookResult::Success => {}
+            HookResult::Success => {
+                debug!(
+                    turn_id = %turn.sub_id,
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_event = hook_event_name,
+                    hook_name = %hook_name,
+                    "hook completed"
+                );
+            }
+            HookResult::SuccessWithPromptAugmentation {
+                append_prompt_text,
+                switch_to_plan_mode,
+            } => {
+                debug!(
+                    turn_id = %turn.sub_id,
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_event = hook_event_name,
+                    hook_name = %hook_name,
+                    switch_to_plan_mode,
+                    appended_prompt_text_present = append_prompt_text.is_some(),
+                    "hook completed with prompt augmentation"
+                );
+            }
+            HookResult::SuccessWithPreToolUseDecision(decision) => {
+                debug!(
+                    turn_id = %turn.sub_id,
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_event = hook_event_name,
+                    hook_name = %hook_name,
+                    ?decision,
+                    "hook completed with pre-tool decision"
+                );
+            }
             HookResult::FailedContinue(error) => {
                 warn!(
                     call_id = %invocation.call_id,
                     tool_name = %invocation.tool_name,
+                    hook_event = hook_event_name,
                     hook_name = %hook_name,
                     error = %error,
-                    "after_tool_use hook failed; continuing"
+                    "{hook_event_name} hook failed; continuing"
                 );
             }
             HookResult::FailedAbort(error) => {
                 warn!(
                     call_id = %invocation.call_id,
                     tool_name = %invocation.tool_name,
+                    hook_event = hook_event_name,
                     hook_name = %hook_name,
                     error = %error,
-                    "after_tool_use hook failed; aborting operation"
+                    "{hook_event_name} hook failed; aborting operation"
                 );
                 return Some(FunctionCallError::Fatal(format!(
-                    "after_tool_use hook '{hook_name}' failed and aborted operation: {error}"
+                    "{hook_event_name} hook '{hook_name}' failed and aborted operation: {error}"
                 )));
             }
         }

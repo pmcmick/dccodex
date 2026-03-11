@@ -1384,6 +1384,43 @@ async fn project_root_markers_supports_alternate_markers() -> std::io::Result<()
     Ok(())
 }
 
+#[tokio::test]
+async fn dccodex_home_prefers_project_dccodex_dir_over_project_codex_dir() -> std::io::Result<()> {
+    let tmp = tempdir().expect("tempdir");
+    let codex_home = tmp.path().join(".dccodex");
+    let project_root = tmp.path().join("project");
+    let nested = project_root.join("child");
+    let project_dot_dccodex = project_root.join(".dccodex");
+    let project_dot_codex = project_root.join(".codex");
+
+    tokio::fs::create_dir_all(&codex_home).await?;
+    tokio::fs::create_dir_all(&project_dot_dccodex).await?;
+    tokio::fs::create_dir_all(&project_dot_codex).await?;
+    tokio::fs::create_dir_all(&nested).await?;
+    tokio::fs::write(project_root.join(".git"), "gitdir: here").await?;
+    tokio::fs::write(
+        project_dot_dccodex.join(CONFIG_TOML_FILE),
+        "model = \"gpt-5\"",
+    )
+    .await?;
+    tokio::fs::write(
+        project_dot_codex.join(CONFIG_TOML_FILE),
+        "model = \"should-not-load\"",
+    )
+    .await?;
+
+    make_config_for_test(&codex_home, &project_root, TrustLevel::Trusted, None).await?;
+
+    let config = ConfigBuilder::default()
+        .codex_home(codex_home.clone())
+        .fallback_cwd(Some(nested))
+        .build()
+        .await?;
+
+    assert_eq!(config.model.as_deref(), Some("gpt-5"));
+    Ok(())
+}
+
 mod requirements_exec_policy_tests {
     use crate::config_loader::ConfigLayerEntry;
     use crate::config_loader::ConfigLayerStack;

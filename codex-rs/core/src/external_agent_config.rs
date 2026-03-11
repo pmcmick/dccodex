@@ -112,6 +112,8 @@ impl ExternalAgentConfigService {
         repo_root: Option<&Path>,
         items: &mut Vec<ExternalAgentConfigMigrationItem>,
     ) -> io::Result<()> {
+        let project_config_dir_name =
+            codex_utils_home_dir::project_config_dir_name(&self.codex_home);
         let cwd = repo_root.map(Path::to_path_buf);
         let source_settings = repo_root.map_or_else(
             || self.claude_home.join("settings.json"),
@@ -119,7 +121,7 @@ impl ExternalAgentConfigService {
         );
         let target_config = repo_root.map_or_else(
             || self.codex_home.join("config.toml"),
-            |repo_root| repo_root.join(".codex").join("config.toml"),
+            |repo_root| repo_root.join(project_config_dir_name).join("config.toml"),
         );
         if source_settings.is_file() {
             let raw_settings = fs::read_to_string(&source_settings)?;
@@ -225,10 +227,12 @@ impl ExternalAgentConfigService {
     }
 
     fn import_config(&self, cwd: Option<&Path>) -> io::Result<()> {
+        let project_config_dir_name =
+            codex_utils_home_dir::project_config_dir_name(&self.codex_home);
         let (source_settings, target_config) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
                 repo_root.join(".claude").join("settings.json"),
-                repo_root.join(".codex").join("config.toml"),
+                repo_root.join(project_config_dir_name).join("config.toml"),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
             return Ok(());
@@ -1025,6 +1029,39 @@ mod tests {
                     "Import {} to {}",
                     repo_root.join(".claude").join("CLAUDE.md").display(),
                     repo_root.join("AGENTS.md").display(),
+                ),
+                cwd: Some(repo_root),
+            }]
+        );
+    }
+
+    #[test]
+    fn detect_repo_uses_dccodex_project_config_path_when_home_is_dccodex() {
+        let root = TempDir::new().expect("create tempdir");
+        let repo_root = root.path().join("repo");
+        fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+        fs::create_dir_all(repo_root.join(".claude")).expect("create dot claude dir");
+        fs::write(
+            repo_root.join(".claude").join("settings.json"),
+            r#"{"env":{"FOO":"bar"}}"#,
+        )
+        .expect("write settings");
+
+        let items = service_for_paths(root.path().join(".claude"), root.path().join(".dccodex"))
+            .detect(ExternalAgentConfigDetectOptions {
+                include_home: false,
+                cwds: Some(vec![repo_root.clone()]),
+            })
+            .expect("detect");
+
+        assert_eq!(
+            items,
+            vec![ExternalAgentConfigMigrationItem {
+                item_type: ExternalAgentConfigMigrationItemType::Config,
+                description: format!(
+                    "Migrate {} into {}",
+                    repo_root.join(".claude").join("settings.json").display(),
+                    repo_root.join(".dccodex").join("config.toml").display(),
                 ),
                 cwd: Some(repo_root),
             }]

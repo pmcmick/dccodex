@@ -265,7 +265,7 @@ pub struct Config {
 
     /// Optional external notifier command. When set, Codex will spawn this
     /// program after each completed *turn* (i.e. when the agent finishes
-    /// processing a user submission). The value must be the full command
+    /// processing a user submission). Each command must be the full command
     /// broken into argv tokens **without** the trailing JSON argument - Codex
     /// appends one extra argument containing a JSON payload describing the
     /// event.
@@ -283,7 +283,58 @@ pub struct Config {
     /// ```
     ///
     /// If unset the feature is disabled.
-    pub notify: Option<Vec<String>>,
+    pub notify: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked immediately after each user
+    /// prompt submission is accepted.
+    pub notify_on_user_prompt_submit: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked immediately before each
+    /// model sampling request.
+    pub notify_on_before_model_request: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a model stream emits a
+    /// `response.created` event.
+    pub notify_on_model_response_created: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a turn starts.
+    pub notify_on_turn_started: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a turn completes.
+    pub notify_on_turn_completed: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a turn is aborted.
+    pub notify_on_turn_aborted: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked after session configuration
+    /// is emitted (session start).
+    pub notify_on_session_start: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked during shutdown.
+    pub notify_on_session_shutdown: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked for compaction lifecycle
+    /// events.
+    pub notify_on_compaction: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked after every tool execution.
+    pub notify_on_after_tool_use: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked immediately before every
+    /// tool execution.
+    pub notify_on_pre_tool_use: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a tool invocation
+    /// fails.
+    pub notify_on_tool_failure: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked after successful tool
+    /// executions.
+    pub notify_on_post_tool_use_success: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked whenever a model response
+    /// stream emits `response.completed`.
+    pub notify_on_model_response_completed: Option<Vec<Vec<String>>>,
 
     /// TUI notifications preference. When set, the TUI will send terminal notifications on
     /// approvals and turn completions when not focused.
@@ -1077,7 +1128,49 @@ pub struct ConfigToml {
 
     /// Optional external command to spawn for end-user notifications.
     #[serde(default)]
-    pub notify: Option<Vec<String>>,
+    pub notify: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_user_prompt_submit: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_before_model_request: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_model_response_created: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_turn_started: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_turn_completed: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_turn_aborted: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_session_start: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_session_shutdown: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_compaction: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_after_tool_use: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_pre_tool_use: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_tool_failure: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_post_tool_use_success: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_model_response_completed: Option<HookCommandsToml>,
 
     /// System instructions.
     pub instructions: Option<String>,
@@ -1325,6 +1418,35 @@ pub struct ConfigToml {
     pub experimental_use_freeform_apply_patch: Option<bool>,
     /// Preferred OSS provider for local models, e.g. "lmstudio" or "ollama".
     pub oss_provider: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq, JsonSchema)]
+#[serde(untagged)]
+pub enum HookCommandsToml {
+    Single(Vec<String>),
+    Multiple(Vec<Vec<String>>),
+}
+
+impl HookCommandsToml {
+    fn into_commands(self) -> Vec<Vec<String>> {
+        match self {
+            Self::Single(command) => vec![command],
+            Self::Multiple(commands) => commands,
+        }
+    }
+}
+
+fn normalize_hook_commands(commands: Option<HookCommandsToml>) -> Option<Vec<Vec<String>>> {
+    let commands = commands?
+        .into_commands()
+        .into_iter()
+        .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+        .collect::<Vec<_>>();
+    if commands.is_empty() {
+        None
+    } else {
+        Some(commands)
+    }
 }
 
 impl From<ConfigToml> for UserSavedConfig {
@@ -2369,7 +2491,29 @@ impl Config {
                 macos_seatbelt_profile_extensions: None,
             },
             enforce_residency: enforce_residency.value,
-            notify: cfg.notify,
+            notify: normalize_hook_commands(cfg.notify),
+            notify_on_user_prompt_submit: normalize_hook_commands(cfg.notify_on_user_prompt_submit),
+            notify_on_before_model_request: normalize_hook_commands(
+                cfg.notify_on_before_model_request,
+            ),
+            notify_on_model_response_created: normalize_hook_commands(
+                cfg.notify_on_model_response_created,
+            ),
+            notify_on_turn_started: normalize_hook_commands(cfg.notify_on_turn_started),
+            notify_on_turn_completed: normalize_hook_commands(cfg.notify_on_turn_completed),
+            notify_on_turn_aborted: normalize_hook_commands(cfg.notify_on_turn_aborted),
+            notify_on_session_start: normalize_hook_commands(cfg.notify_on_session_start),
+            notify_on_session_shutdown: normalize_hook_commands(cfg.notify_on_session_shutdown),
+            notify_on_compaction: normalize_hook_commands(cfg.notify_on_compaction),
+            notify_on_after_tool_use: normalize_hook_commands(cfg.notify_on_after_tool_use),
+            notify_on_pre_tool_use: normalize_hook_commands(cfg.notify_on_pre_tool_use),
+            notify_on_tool_failure: normalize_hook_commands(cfg.notify_on_tool_failure),
+            notify_on_post_tool_use_success: normalize_hook_commands(
+                cfg.notify_on_post_tool_use_success,
+            ),
+            notify_on_model_response_completed: normalize_hook_commands(
+                cfg.notify_on_model_response_completed,
+            ),
             user_instructions,
             base_instructions,
             personality,

@@ -59,7 +59,16 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
+use codex_hooks::HookEventAfterModelResponseCompleted;
+use codex_hooks::HookEventAfterModelResponseCreated;
+use codex_hooks::HookEventBeforeModelRequest;
+use codex_hooks::HookEventSessionShutdown;
+use codex_hooks::HookEventSessionStart;
+use codex_hooks::HookEventTurnAborted;
+use codex_hooks::HookEventTurnCompleted;
+use codex_hooks::HookEventTurnStarted;
 use codex_hooks::HookPayload;
+use codex_hooks::HookResponse;
 use codex_hooks::HookResult;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
@@ -1579,6 +1588,20 @@ impl Session {
         let _ = hook_shell_argv.pop();
         let hooks = Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
+            after_user_prompt_submit_argv: config.notify_on_user_prompt_submit.clone(),
+            before_model_request_argv: config.notify_on_before_model_request.clone(),
+            after_model_response_created_argv: config.notify_on_model_response_created.clone(),
+            turn_started_argv: config.notify_on_turn_started.clone(),
+            turn_completed_argv: config.notify_on_turn_completed.clone(),
+            turn_aborted_argv: config.notify_on_turn_aborted.clone(),
+            session_start_argv: config.notify_on_session_start.clone(),
+            session_shutdown_argv: config.notify_on_session_shutdown.clone(),
+            compaction_argv: config.notify_on_compaction.clone(),
+            after_tool_use_argv: config.notify_on_after_tool_use.clone(),
+            pre_tool_use_argv: config.notify_on_pre_tool_use.clone(),
+            tool_failure_argv: config.notify_on_tool_failure.clone(),
+            post_tool_use_success_argv: config.notify_on_post_tool_use_success.clone(),
+            after_model_response_completed_argv: config.notify_on_model_response_completed.clone(),
             feature_enabled: config.features.enabled(Feature::CodexHooks),
             config_layer_stack: Some(config.config_layer_stack.clone()),
             shell_program: Some(hook_shell_program),
@@ -2511,6 +2534,47 @@ impl Session {
             msg,
         };
         self.send_event_raw(event).await;
+        let turn_hook_event = match &legacy_source {
+            EventMsg::TurnStarted(event) => Some(HookEvent::TurnStarted {
+                event: HookEventTurnStarted {
+                    thread_id: self.conversation_id,
+                    turn_id: event.turn_id.clone(),
+                    model_context_window: event.model_context_window,
+                    collaboration_mode_kind: event.collaboration_mode_kind,
+                },
+            }),
+            EventMsg::TurnComplete(event) => Some(HookEvent::TurnCompleted {
+                event: HookEventTurnCompleted {
+                    thread_id: self.conversation_id,
+                    turn_id: event.turn_id.clone(),
+                    last_agent_message: event.last_agent_message.clone(),
+                },
+            }),
+            EventMsg::TurnAborted(event) => Some(HookEvent::TurnAborted {
+                event: HookEventTurnAborted {
+                    thread_id: self.conversation_id,
+                    turn_id: event.turn_id.clone(),
+                    reason: event.reason.clone(),
+                },
+            }),
+            _ => None,
+        };
+        if let Some(hook_event) = turn_hook_event {
+            let hook_event_name = match &hook_event {
+                HookEvent::TurnStarted { .. } => "turn_started",
+                HookEvent::TurnCompleted { .. } => "turn_completed",
+                HookEvent::TurnAborted { .. } => "turn_aborted",
+                _ => unreachable!("unexpected hook event variant"),
+            };
+            self.dispatch_non_blocking_hook_event(
+                hook_event_name,
+                hook_event,
+                turn_context.cwd.clone(),
+                turn_context.app_server_client_name.clone(),
+                Some(turn_context.sub_id.as_str()),
+            )
+            .await;
+        }
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)
@@ -2547,7 +2611,119 @@ impl Session {
         self.conversation.clear_active_handoff().await;
     }
 
+    pub(crate) async fn dispatch_non_blocking_hook_event(
+        &self,
+        hook_event_name: &'static str,
+        hook_event: HookEvent,
+        cwd: PathBuf,
+        client: Option<String>,
+        turn_id: Option<&str>,
+    ) {
+        let turn_id = turn_id.unwrap_or("-");
+        let hook_outcomes = self
+            .hooks()
+            .dispatch(HookPayload {
+                session_id: self.conversation_id,
+                cwd,
+                client,
+                triggered_at: chrono::Utc::now(),
+                hook_event,
+            })
+            .await;
+        debug!(
+            turn_id = %turn_id,
+            hook_event = hook_event_name,
+            hooks_executed = hook_outcomes.len(),
+            "hook dispatch completed"
+        );
+        for hook_outcome in hook_outcomes {
+            let hook_name = hook_outcome.hook_name;
+            match hook_outcome.result {
+                HookResult::Success => {
+                    debug!(
+                        turn_id = %turn_id,
+                        hook_event = hook_event_name,
+                        hook_name = %hook_name,
+                        "hook completed"
+                    );
+                }
+                HookResult::SuccessWithPromptAugmentation {
+                    append_prompt_text,
+                    switch_to_plan_mode,
+                } => {
+                    debug!(
+                        turn_id = %turn_id,
+                        hook_event = hook_event_name,
+                        hook_name = %hook_name,
+                        switch_to_plan_mode,
+                        appended_prompt_text_present = append_prompt_text.is_some(),
+                        "hook completed with prompt augmentation"
+                    );
+                }
+                HookResult::SuccessWithPreToolUseDecision(decision) => {
+                    debug!(
+                        turn_id = %turn_id,
+                        hook_event = hook_event_name,
+                        hook_name = %hook_name,
+                        ?decision,
+                        "hook completed with pre-tool decision"
+                    );
+                }
+                HookResult::FailedContinue(error) | HookResult::FailedAbort(error) => {
+                    warn!(
+                        turn_id = %turn_id,
+                        hook_event = hook_event_name,
+                        hook_name = %hook_name,
+                        error = %error,
+                        "hook failed; continuing"
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        let session_hook_dispatch = match &event.msg {
+            EventMsg::SessionConfigured(configured) => {
+                let client = {
+                    let state = self.state.lock().await;
+                    state.session_configuration.app_server_client_name.clone()
+                };
+                Some((
+                    "session_start",
+                    HookEvent::SessionStart {
+                        event: HookEventSessionStart {
+                            thread_id: self.conversation_id,
+                            model: configured.model.clone(),
+                            model_provider_id: configured.model_provider_id.clone(),
+                            cwd: configured.cwd.clone(),
+                        },
+                    },
+                    configured.cwd.clone(),
+                    client,
+                ))
+            }
+            EventMsg::ShutdownComplete => {
+                let (cwd, client) = {
+                    let state = self.state.lock().await;
+                    (
+                        state.session_configuration.cwd.clone(),
+                        state.session_configuration.app_server_client_name.clone(),
+                    )
+                };
+                Some((
+                    "session_shutdown",
+                    HookEvent::SessionShutdown {
+                        event: HookEventSessionShutdown {
+                            thread_id: self.conversation_id,
+                        },
+                    },
+                    cwd,
+                    client,
+                ))
+            }
+            _ => None,
+        };
         // Record the last known agent status.
         if let Some(status) = agent_status_from_event(&event.msg) {
             self.agent_status.send_replace(status);
@@ -2557,6 +2733,10 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
         if let Err(e) = self.tx_event.send(event).await {
             debug!("dropping event because channel is closed: {e}");
+        }
+        if let Some((hook_event_name, hook_event, cwd, client)) = session_hook_dispatch {
+            self.dispatch_non_blocking_hook_event(hook_event_name, hook_event, cwd, client, None)
+                .await;
         }
     }
 
@@ -4265,9 +4445,14 @@ fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
 
 /// Operation handlers
 mod handlers {
+    use tracing::debug;
+    use tracing::warn;
+
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
+    use crate::codex::dispatch_hook_payload;
+    use crate::features::Feature;
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
@@ -4308,6 +4493,10 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
+    use codex_hooks::HookEvent;
+    use codex_hooks::HookEventAfterUserPromptSubmit;
+    use codex_hooks::HookPayload;
+    use codex_hooks::HookResult;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
@@ -4320,7 +4509,6 @@ mod handlers {
     use std::path::PathBuf;
     use std::sync::Arc;
     use tracing::info;
-    use tracing::warn;
 
     pub async fn interrupt(sess: &Arc<Session>) {
         sess.interrupt_task().await;
@@ -4348,7 +4536,7 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let (items, updates) = match op {
+        let (mut items, mut updates) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -4401,6 +4589,142 @@ mod handlers {
             _ => unreachable!(),
         };
 
+        let input_messages = items
+            .iter()
+            .filter_map(|item| match item {
+                UserInput::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<String>>();
+        let (hook_cwd, hook_client) = {
+            let state = sess.state.lock().await;
+            match state.session_configuration.clone().apply(&updates) {
+                Ok(next_configuration) => (
+                    next_configuration.cwd,
+                    next_configuration.app_server_client_name,
+                ),
+                Err(err) => {
+                    sess.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: err.to_string(),
+                            codex_error_info: Some(CodexErrorInfo::BadRequest),
+                        }),
+                    })
+                    .await;
+                    return;
+                }
+            }
+        };
+        let hook_outcomes = dispatch_hook_payload(
+            sess.as_ref(),
+            "after_user_prompt_submit",
+            HookPayload {
+                session_id: sess.conversation_id,
+                cwd: hook_cwd,
+                client: hook_client,
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::AfterUserPromptSubmit {
+                    event: HookEventAfterUserPromptSubmit {
+                        thread_id: sess.conversation_id,
+                        turn_id: sub_id.clone(),
+                        input_messages,
+                    },
+                },
+            },
+            Some(sub_id.as_str()),
+        )
+        .await;
+        let mut appended_prompt_texts = Vec::new();
+        let mut hook_requests_plan_mode = false;
+        for hook_outcome in hook_outcomes {
+            let hook_name = hook_outcome.hook_name;
+            match hook_outcome.result {
+                HookResult::Success => {
+                    debug!(
+                        turn_id = %sub_id,
+                        hook_event = "after_user_prompt_submit",
+                        hook_name = %hook_name,
+                        "hook completed"
+                    );
+                }
+                HookResult::SuccessWithPromptAugmentation {
+                    append_prompt_text,
+                    switch_to_plan_mode,
+                } => {
+                    debug!(
+                        turn_id = %sub_id,
+                        hook_event = "after_user_prompt_submit",
+                        hook_name = %hook_name,
+                        switch_to_plan_mode,
+                        appended_prompt_text_present = append_prompt_text.is_some(),
+                        "hook completed with prompt augmentation"
+                    );
+                    if let Some(text) = append_prompt_text
+                        && !text.is_empty()
+                    {
+                        appended_prompt_texts.push(text);
+                    }
+                    hook_requests_plan_mode |= switch_to_plan_mode;
+                }
+                HookResult::SuccessWithPreToolUseDecision(decision) => {
+                    debug!(
+                        turn_id = %sub_id,
+                        hook_event = "after_user_prompt_submit",
+                        hook_name = %hook_name,
+                        ?decision,
+                        "hook completed with pre-tool decision"
+                    );
+                }
+                HookResult::FailedContinue(error) => {
+                    warn!(
+                        turn_id = %sub_id,
+                        hook_name = %hook_name,
+                        error = %error,
+                        "after_user_prompt_submit hook failed; continuing"
+                    );
+                }
+                HookResult::FailedAbort(error) => {
+                    let message = format!(
+                        "after_user_prompt_submit hook '{hook_name}' failed and aborted turn submission: {error}"
+                    );
+                    warn!(
+                        turn_id = %sub_id,
+                        hook_name = %hook_name,
+                        error = %error,
+                        "after_user_prompt_submit hook failed; aborting operation"
+                    );
+                    sess.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message,
+                            codex_error_info: None,
+                        }),
+                    })
+                    .await;
+                    return;
+                }
+            }
+        }
+        if sess.features.enabled(Feature::CollaborationModes)
+            && hook_requests_plan_mode
+            && let Some(current_mode) = updates.collaboration_mode.clone()
+            && current_mode.mode == ModeKind::Default
+            && let Some(plan_mask) = sess
+                .services
+                .models_manager
+                .list_collaboration_modes()
+                .into_iter()
+                .find(|mask| mask.mode == Some(ModeKind::Plan))
+        {
+            debug!(
+                turn_id = %sub_id,
+                hook_requests_plan_mode,
+                "switching submitted turn to Plan mode"
+            );
+            updates.collaboration_mode = Some(current_mode.apply_mask(&plan_mask));
+        }
+
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -4408,6 +4732,12 @@ mod handlers {
         sess.maybe_emit_unknown_model_warning_for_turn(current_context.as_ref())
             .await;
         current_context.session_telemetry.user_prompt(&items);
+        for appended_text in appended_prompt_texts {
+            items.push(UserInput::Text {
+                text: appended_text,
+                text_elements: Vec::new(),
+            });
+        }
 
         // Attempt to inject input into current task.
         if let Err(SteerInputError::NoActiveTurn(items)) = sess.steer_input(items, None).await {
@@ -5536,6 +5866,7 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut sampling_request_index = 0u32;
 
     loop {
         if let Some(session_start_source) = sess.take_pending_session_start_source().await {
@@ -5635,6 +5966,103 @@ pub(crate) async fn run_turn(
             })
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
+        sampling_request_index = sampling_request_index.saturating_add(1);
+        let before_model_request_hook_outcomes = dispatch_hook_payload(
+            sess.as_ref(),
+            "before_model_request",
+            HookPayload {
+                session_id: sess.conversation_id,
+                cwd: turn_context.cwd.clone(),
+                client: turn_context.app_server_client_name.clone(),
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::BeforeModelRequest {
+                    event: HookEventBeforeModelRequest {
+                        thread_id: sess.conversation_id,
+                        turn_id: turn_context.sub_id.clone(),
+                        model: turn_context.model_info.slug.clone(),
+                        sampling_request_index,
+                        input_messages: sampling_request_input_messages.clone(),
+                    },
+                },
+            },
+            Some(turn_context.sub_id.as_str()),
+        )
+        .await;
+        let mut abort_message = None;
+        for hook_outcome in before_model_request_hook_outcomes {
+            let hook_name = hook_outcome.hook_name;
+            match hook_outcome.result {
+                HookResult::Success => {
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        hook_event = "before_model_request",
+                        hook_name = %hook_name,
+                        sampling_request_index,
+                        "hook completed"
+                    );
+                }
+                HookResult::SuccessWithPromptAugmentation {
+                    append_prompt_text,
+                    switch_to_plan_mode,
+                } => {
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        hook_event = "before_model_request",
+                        hook_name = %hook_name,
+                        sampling_request_index,
+                        switch_to_plan_mode,
+                        appended_prompt_text_present = append_prompt_text.is_some(),
+                        "hook completed with prompt augmentation"
+                    );
+                }
+                HookResult::SuccessWithPreToolUseDecision(decision) => {
+                    debug!(
+                        turn_id = %turn_context.sub_id,
+                        hook_event = "before_model_request",
+                        hook_name = %hook_name,
+                        sampling_request_index,
+                        ?decision,
+                        "hook completed with pre-tool decision"
+                    );
+                }
+                HookResult::FailedContinue(error) => {
+                    warn!(
+                        turn_id = %turn_context.sub_id,
+                        hook_name = %hook_name,
+                        sampling_request_index,
+                        error = %error,
+                        "before_model_request hook failed; continuing"
+                    );
+                }
+                HookResult::FailedAbort(error) => {
+                    let message = format!(
+                        "before_model_request hook '{hook_name}' failed and aborted sampling: {error}"
+                    );
+                    warn!(
+                        turn_id = %turn_context.sub_id,
+                        hook_name = %hook_name,
+                        sampling_request_index,
+                        error = %error,
+                        "before_model_request hook failed; aborting operation"
+                    );
+                    if abort_message.is_none() {
+                        abort_message = Some(message);
+                    }
+                    break;
+                }
+            }
+        }
+        if let Some(message) = abort_message {
+            sess.send_event(
+                &turn_context,
+                EventMsg::Error(ErrorEvent {
+                    message,
+                    codex_error_info: None,
+                }),
+            )
+            .await;
+            return None;
+        }
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
         match run_sampling_request(
             Arc::clone(&sess),
@@ -5643,6 +6071,7 @@ pub(crate) async fn run_turn(
             &mut client_session,
             turn_metadata_header.as_deref(),
             sampling_request_input,
+            sampling_request_index,
             &turn_enabled_connectors,
             skills_outcome,
             &mut server_model_warning_emitted_for_turn,
@@ -5752,6 +6181,9 @@ pub(crate) async fn run_turn(
                                     turn_id: turn_context.sub_id.clone(),
                                     input_messages: sampling_request_input_messages,
                                     last_assistant_message: last_agent_message.clone(),
+                                    proposed_plan: last_agent_message
+                                        .as_deref()
+                                        .and_then(extract_proposed_plan_text),
                                 },
                             },
                         })
@@ -5762,6 +6194,28 @@ pub(crate) async fn run_turn(
                         let hook_name = hook_outcome.hook_name;
                         match hook_outcome.result {
                             HookResult::Success => {}
+                            HookResult::SuccessWithPromptAugmentation {
+                                append_prompt_text,
+                                switch_to_plan_mode,
+                            } => {
+                                debug!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_event = "after_agent",
+                                    hook_name = %hook_name,
+                                    switch_to_plan_mode,
+                                    appended_prompt_text_present = append_prompt_text.is_some(),
+                                    "hook completed with prompt augmentation"
+                                );
+                            }
+                            HookResult::SuccessWithPreToolUseDecision(decision) => {
+                                debug!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_event = "after_agent",
+                                    hook_name = %hook_name,
+                                    ?decision,
+                                    "hook completed with pre-tool decision"
+                                );
+                            }
                             HookResult::FailedContinue(error) => {
                                 warn!(
                                     turn_id = %turn_context.sub_id,
@@ -6096,6 +6550,23 @@ fn build_prompt(
         output_schema: turn_context.final_output_json_schema.clone(),
     }
 }
+async fn dispatch_hook_payload(
+    sess: &Session,
+    hook_event_name: &'static str,
+    hook_payload: HookPayload,
+    turn_id: Option<&str>,
+) -> Vec<HookResponse> {
+    let turn_id = turn_id.unwrap_or("-");
+    let hook_outcomes = sess.hooks().dispatch(hook_payload).await;
+    debug!(
+        turn_id = %turn_id,
+        hook_event = hook_event_name,
+        hooks_executed = hook_outcomes.len(),
+        "hook dispatch completed"
+    );
+    hook_outcomes
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -6112,6 +6583,7 @@ async fn run_sampling_request(
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
+    sampling_request_index: u32,
     explicitly_enabled_connectors: &HashSet<String>,
     skills_outcome: Option<&SkillLoadOutcome>,
     server_model_warning_emitted_for_turn: &mut bool,
@@ -6143,6 +6615,7 @@ async fn run_sampling_request(
             Arc::clone(&turn_context),
             client_session,
             turn_metadata_header,
+            sampling_request_index,
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
             &prompt,
@@ -6866,6 +7339,7 @@ async fn try_run_sampling_request(
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
     turn_metadata_header: Option<&str>,
+    sampling_request_index: u32,
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
     prompt: &Prompt,
@@ -6944,7 +7418,103 @@ async fn try_run_sampling_request(
         record_turn_ttft_metric(&turn_context, &event).await;
 
         match event {
-            ResponseEvent::Created => {}
+            ResponseEvent::Created => {
+                let hook_outcomes = dispatch_hook_payload(
+                    sess.as_ref(),
+                    "after_model_response_created",
+                    HookPayload {
+                        session_id: sess.conversation_id,
+                        cwd: turn_context.cwd.clone(),
+                        client: turn_context.app_server_client_name.clone(),
+                        triggered_at: chrono::Utc::now(),
+                        hook_event: HookEvent::AfterModelResponseCreated {
+                            event: HookEventAfterModelResponseCreated {
+                                thread_id: sess.conversation_id,
+                                turn_id: turn_context.sub_id.clone(),
+                                model: turn_context.model_info.slug.clone(),
+                                sampling_request_index,
+                            },
+                        },
+                    },
+                    Some(turn_context.sub_id.as_str()),
+                )
+                .await;
+                let mut abort_message = None;
+                for hook_outcome in hook_outcomes {
+                    let hook_name = hook_outcome.hook_name;
+                    match hook_outcome.result {
+                        HookResult::Success => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_created",
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                "hook completed"
+                            );
+                        }
+                        HookResult::SuccessWithPromptAugmentation {
+                            append_prompt_text,
+                            switch_to_plan_mode,
+                        } => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_created",
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                switch_to_plan_mode,
+                                appended_prompt_text_present = append_prompt_text.is_some(),
+                                "hook completed with prompt augmentation"
+                            );
+                        }
+                        HookResult::SuccessWithPreToolUseDecision(decision) => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_created",
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                ?decision,
+                                "hook completed with pre-tool decision"
+                            );
+                        }
+                        HookResult::FailedContinue(error) => {
+                            warn!(
+                                turn_id = %turn_context.sub_id,
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                error = %error,
+                                "after_model_response_created hook failed; continuing"
+                            );
+                        }
+                        HookResult::FailedAbort(error) => {
+                            let message = format!(
+                                "after_model_response_created hook '{hook_name}' failed and aborted sampling: {error}"
+                            );
+                            warn!(
+                                turn_id = %turn_context.sub_id,
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                error = %error,
+                                "after_model_response_created hook failed; aborting operation"
+                            );
+                            if abort_message.is_none() {
+                                abort_message = Some(message);
+                            }
+                            break;
+                        }
+                    }
+                }
+                if let Some(message) = abort_message {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Error(ErrorEvent {
+                            message: message.clone(),
+                            codex_error_info: None,
+                        }),
+                    )
+                    .await;
+                    break Err(CodexErr::Fatal(message));
+                }
+            }
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()
@@ -7067,7 +7637,7 @@ async fn try_run_sampling_request(
                 sess.services.models_manager.refresh_if_new_etag(etag).await;
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
                 flush_assistant_text_segments_all(
@@ -7081,7 +7651,103 @@ async fn try_run_sampling_request(
                     .await;
                 should_emit_turn_diff = true;
 
+                let proposed_plan = last_agent_message
+                    .as_deref()
+                    .and_then(extract_proposed_plan_text)
+                    .map(|plan| strip_citations(&plan).0);
                 needs_follow_up |= sess.has_pending_input().await;
+                let hook_outcomes = dispatch_hook_payload(
+                    sess.as_ref(),
+                    "after_model_response_completed",
+                    HookPayload {
+                        session_id: sess.conversation_id,
+                        cwd: turn_context.cwd.clone(),
+                        client: turn_context.app_server_client_name.clone(),
+                        triggered_at: chrono::Utc::now(),
+                        hook_event: HookEvent::AfterModelResponseCompleted {
+                            event: HookEventAfterModelResponseCompleted {
+                                thread_id: sess.conversation_id,
+                                turn_id: turn_context.sub_id.clone(),
+                                response_id,
+                                token_usage: token_usage.clone(),
+                                needs_follow_up,
+                                proposed_plan,
+                            },
+                        },
+                    },
+                    Some(turn_context.sub_id.as_str()),
+                )
+                .await;
+                let mut abort_message = None;
+                for hook_outcome in hook_outcomes {
+                    let hook_name = hook_outcome.hook_name;
+                    match hook_outcome.result {
+                        HookResult::Success => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_completed",
+                                hook_name = %hook_name,
+                                "hook completed"
+                            );
+                        }
+                        HookResult::SuccessWithPromptAugmentation {
+                            append_prompt_text,
+                            switch_to_plan_mode,
+                        } => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_completed",
+                                hook_name = %hook_name,
+                                switch_to_plan_mode,
+                                appended_prompt_text_present = append_prompt_text.is_some(),
+                                "hook completed with prompt augmentation"
+                            );
+                        }
+                        HookResult::SuccessWithPreToolUseDecision(decision) => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_completed",
+                                hook_name = %hook_name,
+                                ?decision,
+                                "hook completed with pre-tool decision"
+                            );
+                        }
+                        HookResult::FailedContinue(error) => {
+                            warn!(
+                                turn_id = %turn_context.sub_id,
+                                hook_name = %hook_name,
+                                error = %error,
+                                "after_model_response_completed hook failed; continuing"
+                            );
+                        }
+                        HookResult::FailedAbort(error) => {
+                            let message = format!(
+                                "after_model_response_completed hook '{hook_name}' failed and aborted response completion: {error}"
+                            );
+                            warn!(
+                                turn_id = %turn_context.sub_id,
+                                hook_name = %hook_name,
+                                error = %error,
+                                "after_model_response_completed hook failed; aborting operation"
+                            );
+                            if abort_message.is_none() {
+                                abort_message = Some(message);
+                            }
+                            break;
+                        }
+                    }
+                }
+                if let Some(message) = abort_message {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Error(ErrorEvent {
+                            message: message.clone(),
+                            codex_error_info: None,
+                        }),
+                    )
+                    .await;
+                    break Err(CodexErr::Fatal(message));
+                }
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,
