@@ -2662,10 +2662,55 @@ impl Session {
     }
 
     pub(crate) async fn send_event_raw(&self, event: Event) {
+        let session_hook_dispatch = match &event.msg {
+            EventMsg::SessionConfigured(configured) => {
+                let client = {
+                    let state = self.state.lock().await;
+                    state.session_configuration.app_server_client_name.clone()
+                };
+                Some((
+                    "session_start",
+                    HookEvent::SessionStart {
+                        event: HookEventSessionStart {
+                            thread_id: self.conversation_id,
+                            model: configured.model.clone(),
+                            model_provider_id: configured.model_provider_id.clone(),
+                            cwd: configured.cwd.clone(),
+                        },
+                    },
+                    configured.cwd.clone(),
+                    client,
+                ))
+            }
+            EventMsg::ShutdownComplete => {
+                let (cwd, client) = {
+                    let state = self.state.lock().await;
+                    (
+                        state.session_configuration.cwd.clone(),
+                        state.session_configuration.app_server_client_name.clone(),
+                    )
+                };
+                Some((
+                    "session_shutdown",
+                    HookEvent::SessionShutdown {
+                        event: HookEventSessionShutdown {
+                            thread_id: self.conversation_id,
+                        },
+                    },
+                    cwd,
+                    client,
+                ))
+            }
+            _ => None,
+        };
         // Persist the event into rollout (recorder filters as needed)
         let rollout_items = vec![RolloutItem::EventMsg(event.msg.clone())];
         self.persist_rollout_items(&rollout_items).await;
         self.deliver_event_raw(event).await;
+        if let Some((hook_event_name, hook_event, cwd, client)) = session_hook_dispatch {
+            self.dispatch_non_blocking_hook_event(hook_event_name, hook_event, cwd, client, None)
+                .await;
+        }
     }
 
     async fn deliver_event_raw(&self, event: Event) {

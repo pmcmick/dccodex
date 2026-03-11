@@ -1,4 +1,6 @@
 use dirs::home_dir;
+use std::ffi::OsStr;
+use std::path::Path;
 use std::path::PathBuf;
 
 /// Returns the path to the Codex configuration directory, which can be
@@ -10,13 +12,58 @@ use std::path::PathBuf;
 /// - If `CODEX_HOME` is not set, this function does not verify that the
 ///   directory exists.
 pub fn find_codex_home() -> std::io::Result<PathBuf> {
+    let executable_name = current_executable_name();
     let codex_home_env = std::env::var("CODEX_HOME")
         .ok()
         .filter(|val| !val.is_empty());
-    find_codex_home_from_env(codex_home_env.as_deref())
+    let dccodex_home_env = std::env::var("DCCODEX_HOME")
+        .ok()
+        .filter(|val| !val.is_empty());
+    find_codex_home_from_envs(
+        codex_home_env.as_deref(),
+        dccodex_home_env.as_deref(),
+        executable_name.as_deref(),
+    )
 }
 
-fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<PathBuf> {
+pub fn project_config_dir_name(codex_home: &Path) -> &'static str {
+    project_config_dir_name_for(codex_home, current_executable_name().as_deref())
+}
+
+fn current_executable_name() -> Option<String> {
+    std::env::current_exe()
+        .ok()
+        .and_then(|path| path.file_name().map(OsStr::to_owned))
+        .and_then(|name| name.into_string().ok())
+}
+
+fn is_dccodex_executable_name(executable_name: Option<&str>) -> bool {
+    executable_name
+        .map(|name| name.to_ascii_lowercase())
+        .is_some_and(|name| name.starts_with("dccodex"))
+}
+
+fn project_config_dir_name_for(codex_home: &Path, executable_name: Option<&str>) -> &'static str {
+    if codex_home.file_name() == Some(OsStr::new(".dccodex"))
+        || is_dccodex_executable_name(executable_name)
+    {
+        ".dccodex"
+    } else {
+        ".codex"
+    }
+}
+
+fn find_codex_home_from_envs(
+    codex_home_env: Option<&str>,
+    dccodex_home_env: Option<&str>,
+    executable_name: Option<&str>,
+) -> std::io::Result<PathBuf> {
+    let codex_home_env = if is_dccodex_executable_name(executable_name) {
+        dccodex_home_env.or(codex_home_env)
+    } else {
+        codex_home_env.or(dccodex_home_env)
+    };
+
     // Honor the `CODEX_HOME` environment variable when it is set to allow users
     // (and tests) to override the default location.
     match codex_home_env {
@@ -54,7 +101,11 @@ fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<Pat
                     "Could not find home directory",
                 )
             })?;
-            p.push(".codex");
+            p.push(if is_dccodex_executable_name(executable_name) {
+                ".dccodex"
+            } else {
+                ".codex"
+            });
             Ok(p)
         }
     }
@@ -62,11 +113,13 @@ fn find_codex_home_from_env(codex_home_env: Option<&str>) -> std::io::Result<Pat
 
 #[cfg(test)]
 mod tests {
-    use super::find_codex_home_from_env;
+    use super::find_codex_home_from_envs;
+    use super::project_config_dir_name_for;
     use dirs::home_dir;
     use pretty_assertions::assert_eq;
     use std::fs;
     use std::io::ErrorKind;
+    use std::path::Path;
     use tempfile::TempDir;
 
     #[test]
@@ -77,7 +130,8 @@ mod tests {
             .to_str()
             .expect("missing codex home path should be valid utf-8");
 
-        let err = find_codex_home_from_env(Some(missing_str)).expect_err("missing CODEX_HOME");
+        let err = find_codex_home_from_envs(Some(missing_str), None, None)
+            .expect_err("missing CODEX_HOME");
         assert_eq!(err.kind(), ErrorKind::NotFound);
         assert!(
             err.to_string().contains("CODEX_HOME"),
@@ -94,7 +148,8 @@ mod tests {
             .to_str()
             .expect("file codex home path should be valid utf-8");
 
-        let err = find_codex_home_from_env(Some(file_str)).expect_err("file CODEX_HOME");
+        let err =
+            find_codex_home_from_envs(Some(file_str), None, None).expect_err("file CODEX_HOME");
         assert_eq!(err.kind(), ErrorKind::InvalidInput);
         assert!(
             err.to_string().contains("not a directory"),
@@ -110,7 +165,8 @@ mod tests {
             .to_str()
             .expect("temp codex home path should be valid utf-8");
 
-        let resolved = find_codex_home_from_env(Some(temp_str)).expect("valid CODEX_HOME");
+        let resolved =
+            find_codex_home_from_envs(Some(temp_str), None, None).expect("valid CODEX_HOME");
         let expected = temp_home
             .path()
             .canonicalize()
@@ -120,9 +176,56 @@ mod tests {
 
     #[test]
     fn find_codex_home_without_env_uses_default_home_dir() {
-        let resolved = find_codex_home_from_env(None).expect("default CODEX_HOME");
+        let resolved = find_codex_home_from_envs(None, None, None).expect("default CODEX_HOME");
         let mut expected = home_dir().expect("home dir");
         expected.push(".codex");
         assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn dccodex_executable_prefers_dccodex_home_and_default_dir() {
+        let temp_home = TempDir::new().expect("temp home");
+        let temp_str = temp_home
+            .path()
+            .to_str()
+            .expect("temp codex home path should be valid utf-8");
+
+        let resolved = find_codex_home_from_envs(None, Some(temp_str), Some("dccodex"))
+            .expect("valid DCCODEX_HOME");
+        let expected = temp_home
+            .path()
+            .canonicalize()
+            .expect("canonicalize temp home");
+        assert_eq!(resolved, expected);
+
+        let resolved =
+            find_codex_home_from_envs(None, None, Some("dccodex")).expect("default DCCODEX_HOME");
+        let mut expected = home_dir().expect("home dir");
+        expected.push(".dccodex");
+        assert_eq!(resolved, expected);
+    }
+
+    #[test]
+    fn project_config_dir_name_defaults_to_codex() {
+        assert_eq!(
+            project_config_dir_name_for(Path::new("/tmp/.codex"), None),
+            ".codex"
+        );
+    }
+
+    #[test]
+    fn project_config_dir_name_uses_dccodex_home_basename() {
+        assert_eq!(
+            project_config_dir_name_for(Path::new("/tmp/.dccodex"), None),
+            ".dccodex"
+        );
+    }
+
+    #[test]
+    fn project_config_dir_name_uses_dccodex_executable_name() {
+        assert_eq!(
+            project_config_dir_name_for(Path::new("/tmp/elsewhere"), Some("dccodex")),
+            ".dccodex"
+        );
     }
 }

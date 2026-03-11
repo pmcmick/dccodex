@@ -16,6 +16,12 @@ use crate::protocol::EventMsg;
 use crate::protocol::TurnStartedEvent;
 use crate::protocol::WarningEvent;
 use crate::util::backoff;
+use codex_hooks::HookCompactionStatus;
+use codex_hooks::HookCompactionStrategy;
+use codex_hooks::HookCompactionTrigger;
+use codex_hooks::HookEvent;
+use codex_hooks::HookEventCompaction;
+use codex_hooks::HookPayload;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::ContentItem;
@@ -56,6 +62,15 @@ pub(crate) async fn run_inline_auto_compact_task(
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
+    dispatch_compaction_hook(
+        &sess,
+        &turn_context,
+        HookCompactionTrigger::AutoMidTurn,
+        HookCompactionStrategy::Local,
+        HookCompactionStatus::Started,
+        None,
+    )
+    .await;
     let prompt = turn_context.compact_prompt().to_string();
     let input = vec![UserInput::Text {
         text: prompt,
@@ -63,8 +78,39 @@ pub(crate) async fn run_inline_auto_compact_task(
         text_elements: Vec::new(),
     }];
 
-    run_compact_task_inner(sess, turn_context, input, initial_context_injection).await?;
-    Ok(())
+    match run_compact_task_inner(
+        sess.clone(),
+        turn_context.clone(),
+        input,
+        initial_context_injection,
+    )
+    .await
+    {
+        Ok(()) => {
+            dispatch_compaction_hook(
+                &sess,
+                &turn_context,
+                HookCompactionTrigger::AutoMidTurn,
+                HookCompactionStrategy::Local,
+                HookCompactionStatus::Completed,
+                None,
+            )
+            .await;
+            Ok(())
+        }
+        Err(err) => {
+            dispatch_compaction_hook(
+                &sess,
+                &turn_context,
+                HookCompactionTrigger::AutoMidTurn,
+                HookCompactionStrategy::Local,
+                HookCompactionStatus::Failed,
+                Some(err.to_string()),
+            )
+            .await;
+            Err(err)
+        }
+    }
 }
 
 pub(crate) async fn run_compact_task(
@@ -78,13 +124,84 @@ pub(crate) async fn run_compact_task(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-    run_compact_task_inner(
+    dispatch_compaction_hook(
+        &sess,
+        &turn_context,
+        HookCompactionTrigger::Manual,
+        HookCompactionStrategy::Local,
+        HookCompactionStatus::Started,
+        None,
+    )
+    .await;
+    match run_compact_task_inner(
         sess.clone(),
-        turn_context,
+        turn_context.clone(),
         input,
         InitialContextInjection::DoNotInject,
     )
     .await
+    {
+        Ok(()) => {
+            dispatch_compaction_hook(
+                &sess,
+                &turn_context,
+                HookCompactionTrigger::Manual,
+                HookCompactionStrategy::Local,
+                HookCompactionStatus::Completed,
+                None,
+            )
+            .await;
+            Ok(())
+        }
+        Err(err) => {
+            dispatch_compaction_hook(
+                &sess,
+                &turn_context,
+                HookCompactionTrigger::Manual,
+                HookCompactionStrategy::Local,
+                HookCompactionStatus::Failed,
+                Some(err.to_string()),
+            )
+            .await;
+            Err(err)
+        }
+    }
+}
+
+pub(crate) async fn dispatch_compaction_hook(
+    sess: &Session,
+    turn_context: &TurnContext,
+    trigger: HookCompactionTrigger,
+    strategy: HookCompactionStrategy,
+    status: HookCompactionStatus,
+    error: Option<String>,
+) {
+    let hook_outcomes = sess
+        .hooks()
+        .dispatch(HookPayload {
+            session_id: sess.conversation_id,
+            cwd: turn_context.cwd.clone(),
+            client: turn_context.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::Compaction {
+                event: HookEventCompaction {
+                    thread_id: sess.conversation_id,
+                    turn_id: turn_context.sub_id.clone(),
+                    trigger,
+                    strategy,
+                    status,
+                    error,
+                },
+            },
+        })
+        .await;
+    if !hook_outcomes.is_empty() {
+        tracing::debug!(
+            turn_id = %turn_context.sub_id,
+            hooks_executed = hook_outcomes.len(),
+            "compaction hook dispatch completed"
+        );
+    }
 }
 
 async fn run_compact_task_inner(

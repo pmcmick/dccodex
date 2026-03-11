@@ -6,6 +6,7 @@ use crate::codex::Session;
 use crate::codex::TurnContext;
 use crate::codex::built_tools;
 use crate::compact::InitialContextInjection;
+use crate::compact::dispatch_compaction_hook;
 use crate::compact::insert_initial_context_before_last_real_user_or_summary;
 use crate::context_manager::ContextManager;
 use crate::context_manager::TotalTokenUsageBreakdown;
@@ -16,6 +17,9 @@ use crate::error::Result as CodexResult;
 use crate::protocol::CompactedItem;
 use crate::protocol::EventMsg;
 use crate::protocol::TurnStartedEvent;
+use codex_hooks::HookCompactionStatus;
+use codex_hooks::HookCompactionStrategy;
+use codex_hooks::HookCompactionTrigger;
 use codex_protocol::items::ContextCompactionItem;
 use codex_protocol::items::TurnItem;
 use codex_protocol::models::BaseInstructions;
@@ -30,8 +34,41 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
     turn_context: Arc<TurnContext>,
     initial_context_injection: InitialContextInjection,
 ) -> CodexResult<()> {
-    run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await?;
-    Ok(())
+    dispatch_compaction_hook(
+        &sess,
+        &turn_context,
+        HookCompactionTrigger::AutoMidTurn,
+        HookCompactionStrategy::Remote,
+        HookCompactionStatus::Started,
+        None,
+    )
+    .await;
+    match run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await {
+        Ok(()) => {
+            dispatch_compaction_hook(
+                &sess,
+                &turn_context,
+                HookCompactionTrigger::AutoMidTurn,
+                HookCompactionStrategy::Remote,
+                HookCompactionStatus::Completed,
+                None,
+            )
+            .await;
+            Ok(())
+        }
+        Err(err) => {
+            dispatch_compaction_hook(
+                &sess,
+                &turn_context,
+                HookCompactionTrigger::AutoMidTurn,
+                HookCompactionStrategy::Remote,
+                HookCompactionStatus::Failed,
+                Some(err.to_string()),
+            )
+            .await;
+            Err(err)
+        }
+    }
 }
 
 pub(crate) async fn run_remote_compact_task(
@@ -44,8 +81,43 @@ pub(crate) async fn run_remote_compact_task(
         collaboration_mode_kind: turn_context.collaboration_mode.mode,
     });
     sess.send_event(&turn_context, start_event).await;
-
-    run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject).await
+    dispatch_compaction_hook(
+        &sess,
+        &turn_context,
+        HookCompactionTrigger::Manual,
+        HookCompactionStrategy::Remote,
+        HookCompactionStatus::Started,
+        None,
+    )
+    .await;
+    match run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject)
+        .await
+    {
+        Ok(()) => {
+            dispatch_compaction_hook(
+                &sess,
+                &turn_context,
+                HookCompactionTrigger::Manual,
+                HookCompactionStrategy::Remote,
+                HookCompactionStatus::Completed,
+                None,
+            )
+            .await;
+            Ok(())
+        }
+        Err(err) => {
+            dispatch_compaction_hook(
+                &sess,
+                &turn_context,
+                HookCompactionTrigger::Manual,
+                HookCompactionStrategy::Remote,
+                HookCompactionStatus::Failed,
+                Some(err.to_string()),
+            )
+            .await;
+            Err(err)
+        }
+    }
 }
 
 async fn run_remote_compact_task_inner(

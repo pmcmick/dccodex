@@ -192,6 +192,27 @@ pub async fn load_default_config_for_test(codex_home: &TempDir) -> Config {
 }
 
 #[cfg(target_os = "linux")]
+pub fn codex_linux_sandbox_exe_for_test() -> Result<PathBuf, CargoBinError> {
+    codex_utils_cargo_bin::cargo_bin("codex-linux-sandbox")
+        .or_else(|_| codex_utils_cargo_bin::cargo_bin("codex-exec"))
+        .or_else(|_| {
+            std::env::current_exe().map_err(|err| CargoBinError::NotFound {
+                name: "codex-linux-sandbox".to_string(),
+                env_keys: vec![
+                    "CARGO_BIN_EXE_codex-linux-sandbox".to_string(),
+                    "CARGO_BIN_EXE_codex_linux_sandbox".to_string(),
+                ],
+                fallback: format!("current_exe fallback failed: {err}"),
+            })
+        })
+}
+
+#[cfg(not(target_os = "linux"))]
+pub fn codex_linux_sandbox_exe_for_test() -> Result<PathBuf, CargoBinError> {
+    unreachable!("codex_linux_sandbox_exe_for_test is only used on linux")
+}
+
+#[cfg(target_os = "linux")]
 fn default_test_overrides() -> ConfigOverrides {
     ConfigOverrides {
         codex_linux_sandbox_exe: Some(

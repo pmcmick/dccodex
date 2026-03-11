@@ -22,6 +22,8 @@ enum UserNotification {
         client: Option<String>,
         input_messages: Vec<String>,
         last_assistant_message: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        proposed_plan: Option<String>,
     },
 }
 
@@ -35,9 +37,10 @@ pub fn legacy_notify_json(payload: &HookPayload) -> Result<String, serde_json::E
                 client: payload.client.clone(),
                 input_messages: event.input_messages.clone(),
                 last_assistant_message: event.last_assistant_message.clone(),
+                proposed_plan: event.proposed_plan.clone(),
             })
         }
-        HookEvent::AfterToolUse { .. } => Err(serde_json::Error::io(std::io::Error::other(
+        _ => Err(serde_json::Error::io(std::io::Error::other(
             "legacy notify payload is only supported for after_agent",
         ))),
     }
@@ -107,6 +110,7 @@ mod tests {
             last_assistant_message: Some(
                 "Rename complete and verified `cargo build` succeeds.".to_string(),
             ),
+            proposed_plan: None,
         };
         let serialized = serde_json::to_string(&notification)?;
         let actual: Value = serde_json::from_str(&serialized)?;
@@ -132,6 +136,7 @@ mod tests {
                     last_assistant_message: Some(
                         "Rename complete and verified `cargo build` succeeds.".to_string(),
                     ),
+                    proposed_plan: None,
                 },
             },
         };

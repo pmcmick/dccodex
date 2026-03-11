@@ -773,8 +773,9 @@ async fn load_project_layers(
     dirs.reverse();
 
     let mut layers = Vec::new();
+    let project_config_dir_name = codex_utils_home_dir::project_config_dir_name(codex_home);
     for dir in dirs {
-        let dot_codex = dir.join(".codex");
+        let dot_codex = dir.join(project_config_dir_name);
         if !tokio::fs::metadata(&dot_codex)
             .await
             .map(|meta| meta.is_dir())

@@ -6,9 +6,15 @@ For advanced configuration instructions, see [this documentation](https://develo
 
 For a full configuration reference, see [this documentation](https://developers.openai.com/codex/config-reference).
 
+## Config file location
+
+Codex reads `~/.codex/config.toml` by default.
+
+DCCodex uses `~/.dccodex/config.toml` by default. When DCCodex is running in a repository, it also prefers a project-local `.dccodex/config.toml` over `.codex/config.toml`.
+
 ## Connecting to MCP servers
 
-Codex can connect to MCP servers configured in `~/.codex/config.toml`. See the configuration reference for the latest MCP server options:
+Codex can connect to MCP servers configured in `~/.codex/config.toml`. DCCodex uses `~/.dccodex/config.toml`. See the configuration reference for the latest MCP server options:
 
 - https://developers.openai.com/codex/config-reference
 
@@ -28,11 +34,168 @@ Use `$` in the composer to insert a ChatGPT connector; the popover lists accessi
 apps. The `/apps` command lists available and installed apps. Connected apps appear first
 and are labeled as connected; others are marked as can be installed.
 
-## Notify
+## Hooks
 
-Codex can run a notification hook when the agent finishes a turn. See the configuration reference for the latest notification settings:
+Codex supports two hook families:
 
-- https://developers.openai.com/codex/config-reference
+- legacy `notify`
+- event-specific `notify_on_*` hooks
+
+`notify` runs when an agent turn finishes. `notify_on_*` hooks run for specific lifecycle events and are the preferred extension point when you need structured automation.
+
+For a practical setup guide with examples and event-by-event recommendations, see [hooks.md](./hooks.md).
+
+Each hook command is configured as an argv array. A single command looks like this:
+
+```toml
+notify_on_turn_completed = ["python3", "/absolute/path/hook.py"]
+```
+
+Multiple commands for the same event are configured as a list of argv arrays:
+
+```toml
+notify_on_turn_completed = [
+  ["python3", "/absolute/path/first-hook.py"],
+  ["python3", "/absolute/path/second-hook.py"],
+]
+```
+
+Each configured command receives the event payload JSON as its final argv argument.
+
+### Supported `notify_on_*` hooks
+
+- `notify_on_user_prompt_submit`
+- `notify_on_before_model_request`
+- `notify_on_model_response_created`
+- `notify_on_model_response_completed`
+- `notify_on_turn_started`
+- `notify_on_turn_completed`
+- `notify_on_turn_aborted`
+- `notify_on_session_start`
+- `notify_on_session_shutdown`
+- `notify_on_compaction`
+- `notify_on_after_tool_use`
+- `notify_on_pre_tool_use`
+- `notify_on_tool_failure`
+- `notify_on_post_tool_use_success`
+
+### Payload shape
+
+Every event hook receives a JSON payload with this outer structure:
+
+```json
+{
+  "session_id": "thread_123",
+  "cwd": "/workspace/project",
+  "client": "codex-tui",
+  "triggered_at": "2025-01-01T00:00:00Z",
+  "hook_event": {
+    "event_type": "turn_completed"
+  }
+}
+```
+
+`hook_event` then contains event-specific fields.
+
+Common examples:
+
+- `notify_on_before_model_request`
+  - `thread_id`
+  - `turn_id`
+  - `model`
+  - `sampling_request_index`
+  - `input_messages`
+- `notify_on_model_response_completed`
+  - `thread_id`
+  - `turn_id`
+  - `response_id`
+  - `token_usage`
+  - `needs_follow_up`
+  - `proposed_plan`
+- `notify_on_compaction`
+  - `thread_id`
+  - `turn_id`
+  - `trigger`
+  - `strategy`
+  - `status`
+  - `error`
+- tool lifecycle hooks
+  - `turn_id`
+  - `call_id`
+  - `tool_name`
+  - `tool_kind`
+  - `tool_input`
+  - sandbox metadata
+  - duration/output or error preview, depending on event
+
+The Rust payload types live in `codex-rs/hooks/src/types.rs` if you need the canonical wire shape.
+
+### Special hook outputs
+
+Most `notify_on_*` hooks are fire-and-forget notifications. Two hooks can actively influence behavior.
+
+`notify_on_user_prompt_submit` may return JSON on stdout with:
+
+```json
+{
+  "append_prompt_text": "extra instructions to add to the user turn",
+  "switch_to_plan_mode": true
+}
+```
+
+`append_prompt_text` appends another user-visible message to the outbound request. `switch_to_plan_mode` upgrades the turn into Plan mode.
+
+`notify_on_pre_tool_use` may return JSON on stdout with a tool decision:
+
+```json
+{
+  "decision": "deny",
+  "message": "shell access is disabled for this repo"
+}
+```
+
+or:
+
+```json
+{
+  "decision": "replace",
+  "output": "synthetic tool result",
+  "success": true
+}
+```
+
+`deny` blocks execution. `replace` skips the real tool run and returns the provided output instead.
+
+### Failure behavior
+
+Hooks run in configured order.
+
+- normal success allows later hooks to continue
+- hook failures may either continue or abort, depending on the hook result produced by the runtime
+- `pre_tool_use` can stop the real tool execution without treating that as a tool failure
+
+If a hook exits non-zero or emits invalid JSON for a structured response hook, Codex logs the failure and applies the hook-specific failure handling for that event.
+
+### Example shell hook
+
+This example records `before_model_request` payloads:
+
+```toml
+notify_on_before_model_request = ["bash", "/absolute/path/log-before-model-request.sh"]
+```
+
+```bash
+#!/usr/bin/env bash
+set -euo pipefail
+payload="${@: -1}"
+printf '%s\n' "$payload" >> /tmp/codex-before-model-request.jsonl
+```
+
+### Legacy notify
+
+Codex can run a legacy notification hook when the agent finishes a turn.
+
+- `notify`
 
 When Codex knows which client started the turn, the legacy notify JSON payload also includes a top-level `client` field. The TUI reports `codex-tui`, and the app server reports the `clientInfo.name` value from `initialize`.
 
