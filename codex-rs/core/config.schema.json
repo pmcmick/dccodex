@@ -739,6 +739,25 @@
         }
       ]
     },
+    "HookCommandsToml": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "items": {
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "type": "array"
+        }
+      ]
+    },
     "MemoriesToml": {
       "additionalProperties": false,
       "description": "Memories settings loaded from config.toml.",
@@ -2247,12 +2266,125 @@
       "description": "Collection of in-product notices (different from notifications) See [`crate::config::types::Notices`] for more details"
     },
     "notify": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
       "default": null,
-      "description": "Optional external command to spawn for end-user notifications.",
-      "items": {
-        "type": "string"
-      },
-      "type": "array"
+      "description": "Optional external command to spawn for end-user notifications."
+    },
+    "notify_on_after_tool_use": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_before_model_request": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_compaction": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_model_response_completed": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_model_response_created": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_post_tool_use_success": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_pre_tool_use": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_session_shutdown": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_session_start": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_tool_failure": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_turn_aborted": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_turn_completed": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_turn_started": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_user_prompt_submit": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
     },
     "openai_base_url": {
       "description": "Base URL override for the built-in `openai` model provider.",

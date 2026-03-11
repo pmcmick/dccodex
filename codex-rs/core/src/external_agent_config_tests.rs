@@ -368,6 +368,39 @@ fn import_repo_uses_non_empty_dot_claude_agents_source() {
 }
 
 #[test]
+fn detect_repo_uses_dccodex_project_config_path_when_home_is_dccodex() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create dot claude dir");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{"env":{"FOO":"bar"}}"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(root.path().join(".claude"), root.path().join(".dccodex"))
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Config,
+            description: format!(
+                "Migrate {} into {}",
+                repo_root.join(".claude").join("settings.json").display(),
+                repo_root.join(".dccodex").join("config.toml").display(),
+            ),
+            cwd: Some(repo_root),
+        }]
+    );
+}
+
+#[test]
 fn migration_metric_tags_for_skills_include_skills_count() {
     assert_eq!(
         migration_metric_tags(ExternalAgentConfigMigrationItemType::Skills, Some(3)),
