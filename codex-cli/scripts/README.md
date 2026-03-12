@@ -1,23 +1,31 @@
 # npm releases
 
-Use the staging helper in the repo root to generate npm tarballs for a release. For
-example, to stage the CLI, responses proxy, and SDK packages for version `0.6.0`:
+Use the DCCodex staging helper in the repo root to generate npm tarballs from a local musl
+release artifact:
+
+```bash
+./scripts/stage_dccodex_npm_release.py --release-version 0.114.0
+```
+
+That writes publishable tarballs to `dist/npm/` for:
+
+- `@pmcmick/dccodex`
+- `@pmcmick/dccodex-linux-x64`
+
+The generic helper still exists when you need to stage additional packages or reuse native
+artifacts from a workflow run:
 
 ```bash
 ./scripts/stage_npm_packages.py \
   --release-version 0.6.0 \
-  --package codex \
+  --package dccodex \
   --package codex-responses-api-proxy \
   --package codex-sdk
 ```
 
-This downloads the native artifacts once, hydrates `vendor/` for each package, and writes
-tarballs to `dist/npm/`.
+When `--package dccodex` is provided, the staging helper builds the lightweight
+`@pmcmick/dccodex` meta package plus all platform-native `@pmcmick/dccodex` variants that
+are later published as separate packages.
 
-When `--package codex` is provided, the staging helper builds the lightweight
-`@openai/codex` meta package plus all platform-native `@openai/codex` variants
-that are later published under platform-specific dist-tags.
-
-If you need to invoke `build_npm_package.py` directly, run
-`codex-cli/scripts/install_native_deps.py` first and pass `--vendor-src` pointing to the
-directory that contains the populated `vendor/` tree.
+If you need to invoke `build_npm_package.py` directly, pass `--vendor-src` pointing to a
+directory containing the populated `vendor/` tree.
