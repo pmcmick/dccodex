@@ -1,0 +1,25 @@
+site_name: DCCodex Docs
+site_description: Local documentation for DCCodex deployments and hackathon users
+site_url: http://localhost:8000
+repo_name: pmcmick/dccodex
+repo_url: https://github.com/pmcmick/dccodex
+docs_dir: docs
+theme:
+  name: mkdocs
+nav:
+  - Home: index.md
+  - Hackathon Guide: hackathon.md
+  - Getting Started: getting-started.md
+  - Install: install.md
+  - Authentication: authentication.md
+  - Configuration: config.md
+  - Hooks: hooks.md
+  - Prompts: prompts.md
+  - Slash Commands: slash_commands.md
+  - Exec: exec.md
+  - Sandbox: sandbox.md
+  - Skills: skills.md
+  - Contributing: contributing.md
+markdown_extensions:
+  - toc:
+      permalink: true
