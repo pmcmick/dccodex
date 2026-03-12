@@ -49,6 +49,32 @@ just test
 cargo test --all-features
 ```
 
+### Build a portable Linux musl release artifact in a container
+
+For a portable Linux binary, prefer a containerized musl build instead of linking
+directly against your host system libraries. The repo includes a dedicated
+container builder that mirrors the musl setup used by the release workflow.
+
+From the repo root:
+
+```bash
+./scripts/build_musl_release_container.sh
+```
+
+That script will:
+
+- build `Containerfile.musl-release`
+- run the repo's `.github/scripts/install-musl-build-tools.sh`
+- build `codex-cli` for `x86_64-unknown-linux-musl`
+- smoke-test the binary with `--help`
+- write the packaged artifact to `codex-rs/dist/release/`
+
+You can select a different container runtime or target with environment variables:
+
+```bash
+CONTAINER_RUNTIME=docker ./scripts/build_musl_release_container.sh aarch64-unknown-linux-musl
+```
+
 ## Tracing / verbose logging
 
 Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.
