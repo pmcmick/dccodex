@@ -1,10 +1,10 @@
-<h1 align="center">OpenAI Codex CLI</h1>
+<h1 align="center">DCCodex Legacy TypeScript CLI</h1>
 <p align="center">Lightweight coding agent that runs in your terminal</p>
 
-<p align="center"><code>npm i -g @openai/codex</code></p>
+<p align="center"><code>npm i -g @pmcmick/dccodex</code></p>
 
 > [!IMPORTANT]
-> This is the documentation for the _legacy_ TypeScript implementation of the Codex CLI. It has been superseded by the _Rust_ implementation. See the [README in the root of the Codex repository](https://github.com/openai/codex/blob/main/README.md) for details.
+> This is the documentation for the _legacy_ TypeScript implementation. In this fork, users should install the maintained Rust CLI via `npm i -g @pmcmick/dccodex`. See the [root README](../README.md) and [docs/install.md](../docs/install.md) for the supported install path.
 
 ![Codex demo GIF using: codex "explain this codebase to me"](../.github/demo.gif)
 
@@ -74,11 +74,13 @@ Help us improve by filing issues or submitting PRs (see the section below for ho
 
 ## Quickstart
 
-Install globally:
+For DCCodex, use the maintained Rust CLI install path:
 
 ```shell
-npm install -g @openai/codex
+npm install -g @pmcmick/dccodex
 ```
+
+The remainder of this document describes the legacy TypeScript CLI behavior and development workflow.
 
 Next, set your OpenAI API key as an environment variable:
 
