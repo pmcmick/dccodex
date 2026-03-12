@@ -75,6 +75,25 @@ You can select a different container runtime or target with environment variable
 CONTAINER_RUNTIME=docker ./scripts/build_musl_release_container.sh aarch64-unknown-linux-musl
 ```
 
+### Stage DCCodex npm packages from the musl artifact
+
+After you have built `dccodex-x86_64-unknown-linux-musl.tar.gz`, stage npm tarballs with:
+
+```bash
+./scripts/stage_dccodex_npm_release.py --release-version 0.114.0
+```
+
+That produces:
+
+- `dist/npm/dccodex-linux-x64-npm-0.114.0.tgz`
+- `dist/npm/dccodex-npm-0.114.0.tgz`
+
+After publishing those packages, users can install DCCodex with:
+
+```bash
+npm install -g @pmcmick/dccodex
+```
+
 ## Tracing / verbose logging
 
 Codex is written in Rust, so it honors the `RUST_LOG` environment variable to configure its logging behavior.

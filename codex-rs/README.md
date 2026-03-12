@@ -4,11 +4,11 @@ We provide Codex CLI as a standalone, native executable to ensure a zero-depende
 
 ## Installing Codex
 
-Today, the easiest way to install Codex is via `npm`:
+Today, the easiest way to install DCCodex is via `npm`:
 
 ```shell
-npm i -g @openai/codex
-codex
+npm i -g @pmcmick/dccodex
+dccodex
 ```
 
 You can also install via Homebrew (`brew install --cask codex`) or download a platform-specific release directly from our [GitHub Releases](https://github.com/openai/codex/releases).
