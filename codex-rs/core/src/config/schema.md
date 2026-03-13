@@ -14,8 +14,8 @@ Plan lifecycle hook settings are part of this generated schema. The most
 important plan-specific notifier keys are:
 
 - `notify_on_plan_finalized` for the canonical finalized plan text
-- `notify_on_plan_implementation_completed` for completion of a clean child
-  implementation thread derived from that plan
+- `notify_on_plan_implementation_completed` for completion of the initial
+  implementation task in a clean child thread derived from that plan
 
 These keys are documented in `codex-rs/core/config.schema.json` via the
 `ConfigToml` field comments in `core/src/config/mod.rs`.

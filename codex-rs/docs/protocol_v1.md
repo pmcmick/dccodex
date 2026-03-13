@@ -120,6 +120,11 @@ provenance, including a deterministic `plan_id` (`{thread_id}:{turn_id}`), the
 final plan text, the original user request when available, and the
 `parent_thread_id` when the plan is part of a derived thread hierarchy.
 
+The `plan_implementation_completed` hook is narrower than the generic
+`turn_completed` hook. It fires when the initial implementation task seeded
+into that clean child thread completes. Later user turns in the same child
+thread are treated as ordinary follow-up work and only emit `turn_completed`.
+
 ## Project Memory
 
 Codex can also inject a small project-scoped memory artifact during prompt
@@ -131,9 +136,10 @@ assembly. This is distinct from `AGENTS.md`:
 
 When the current working directory belongs to a git repository, Codex looks for
 `CODEX_HOME/memories/projects/<repo-slug>-<hash>/memory.md` and, if present,
-injects it as a dedicated contextual user fragment immediately before the real
-user turn. The directory key is derived from the repository root plus the git
-origin URL when available.
+injects it as a dedicated contextual user fragment after repo/user
+instructions and environment context, but before the real user turn. The
+directory key is derived from the repository root plus the git origin URL when
+available.
 
 ## Transport
 
