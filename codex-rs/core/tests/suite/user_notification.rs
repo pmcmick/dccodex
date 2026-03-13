@@ -4,6 +4,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
 use codex_core::features::Feature;
+use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
@@ -289,6 +290,98 @@ async fn complex_request_switches_turn_to_plan_mode() -> anyhow::Result<()> {
             .and_then(|value| value.get("effort"))
             .and_then(|value| value.as_str()),
         Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn plan_implementation_completed_hook_fires_only_for_initial_child_task() -> anyhow::Result<()>
+{
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+    responses::mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-2"), ev_completed("resp-2")]),
+    )
+    .await;
+
+    let hook_dir = TempDir::new()?;
+    let hook_script = hook_dir.path().join("plan-implementation-completed.sh");
+    std::fs::write(
+        &hook_script,
+        r#"#!/bin/bash
+set -euo pipefail
+payload_path="$(dirname "$0")/plan-implementation-completed.jsonl"
+printf '%s\n' "${@: -1}" >> "$payload_path"
+"#,
+    )?;
+    std::fs::set_permissions(&hook_script, std::fs::Permissions::from_mode(0o755))?;
+    let hook_script_str = hook_script.to_str().unwrap().to_string();
+    let parent_thread_id = ThreadId::new();
+
+    let test = test_codex()
+        .with_config(move |cfg| {
+            cfg.notify_on_plan_implementation_completed = Some(vec![vec![hook_script_str]]);
+        })
+        .build(&server)
+        .await?;
+    let codex = test
+        .thread_manager
+        .start_thread_with_parent(
+            test.config.clone(),
+            Vec::new(),
+            false,
+            None,
+            Some(parent_thread_id),
+        )
+        .await?
+        .thread;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Implement the finalized plan.".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "Make a small follow-up refinement.".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let notify_file = hook_dir.path().join("plan-implementation-completed.jsonl");
+    fs_wait::wait_for_path_exists(&notify_file, Duration::from_secs(5)).await?;
+    let payloads_raw = tokio::fs::read_to_string(&notify_file).await?;
+    let payloads = payloads_raw
+        .lines()
+        .map(serde_json::from_str::<Value>)
+        .collect::<Result<Vec<_>, _>>()?;
+
+    assert_eq!(payloads.len(), 1);
+    assert_eq!(
+        payloads[0]["hook_event"]["event_type"],
+        json!("plan_implementation_completed")
+    );
+    assert_eq!(
+        payloads[0]["hook_event"]["parent_thread_id"],
+        json!(parent_thread_id.to_string())
     );
 
     Ok(())

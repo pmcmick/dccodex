@@ -53,6 +53,8 @@ pub(crate) async fn load_project_memory(codex_home: &Path, cwd: &Path) -> Option
         .join(project_id.as_str())
         .join(PROJECT_MEMORY_FILENAME);
     let memory = tokio::fs::read_to_string(&memory_path).await.ok()?;
+    // Keep this fragment deliberately small so it stays a high-salience
+    // reminder instead of turning into a second AGENTS.md.
     let memory = truncate_text(
         memory.trim(),
         TruncationPolicy::Tokens(PROJECT_MEMORY_MAX_TOKENS),
@@ -83,6 +85,8 @@ fn build_project_id(git_root: &Path, origin_url: Option<&str>) -> String {
         identity.push('\n');
         identity.push_str(origin_url);
     }
+    // Mix path and origin so sibling clones of the same repo stay distinct
+    // while still producing a readable directory name.
     let digest = sha1_digest(identity.as_bytes());
     let suffix = digest[..PROJECT_ID_HASH_BYTES]
         .iter()

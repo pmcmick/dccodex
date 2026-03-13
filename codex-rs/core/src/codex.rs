@@ -17,6 +17,7 @@ use crate::auth_env_telemetry::collect_auth_env_telemetry;
 use crate::commit_attribution::commit_message_trailer_instruction;
 use crate::compact;
 use crate::compact::InitialContextInjection;
+use crate::compact::collect_user_messages;
 use crate::compact::run_inline_auto_compact_task;
 use crate::compact::should_use_remote_compact_task;
 use crate::compact_remote::run_inline_remote_auto_compact_task;
@@ -173,7 +174,6 @@ use crate::client::ModelClientSession;
 use crate::client_common::Prompt;
 use crate::client_common::ResponseEvent;
 use crate::codex_thread::ThreadConfigSnapshot;
-use crate::compact::collect_user_messages;
 use crate::config::Config;
 use crate::config::Constrained;
 use crate::config::ConstraintResult;
@@ -2795,7 +2795,19 @@ impl Session {
                 let state = self.state.lock().await;
                 state.session_configuration.parent_thread_id
             };
-            if let Some(parent_thread_id) = parent_thread_id {
+            let is_initial_implementation_task = if parent_thread_id.is_some() {
+                let history = self.clone_history().await;
+                collect_user_messages(history.raw_items()).len() == 1
+            } else {
+                false
+            };
+            if let Some(parent_thread_id) = parent_thread_id
+                && is_initial_implementation_task
+            {
+                // A clean implementation child thread is seeded with a single
+                // canonical kickoff prompt. Treat completion of that first
+                // submitted task as the implementation handoff completion
+                // signal; later user turns are ordinary follow-up work.
                 self.dispatch_non_blocking_hook_event(
                     "plan_implementation_completed",
                     HookEvent::PlanImplementationCompleted {

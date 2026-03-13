@@ -356,8 +356,9 @@ pub struct Config {
     /// Optional external notifier command invoked when a turn completes.
     pub notify_on_turn_completed: Option<Vec<Vec<String>>>,
 
-    /// Optional external notifier command invoked when a clean child thread
-    /// created to implement a finalized plan completes a turn.
+    /// Optional external notifier command invoked when the initial
+    /// implementation task in a clean child thread created from a finalized
+    /// plan completes.
     pub notify_on_plan_implementation_completed: Option<Vec<Vec<String>>>,
 
     /// Optional external notifier command invoked when a turn is aborted.
