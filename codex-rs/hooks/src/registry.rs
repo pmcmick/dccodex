@@ -24,8 +24,10 @@ pub struct HooksConfig {
     pub after_user_prompt_submit_argv: Option<Vec<Vec<String>>>,
     pub before_model_request_argv: Option<Vec<Vec<String>>>,
     pub after_model_response_created_argv: Option<Vec<Vec<String>>>,
+    pub plan_finalized_argv: Option<Vec<Vec<String>>>,
     pub turn_started_argv: Option<Vec<Vec<String>>>,
     pub turn_completed_argv: Option<Vec<Vec<String>>>,
+    pub plan_implementation_completed_argv: Option<Vec<Vec<String>>>,
     pub turn_aborted_argv: Option<Vec<Vec<String>>>,
     pub session_start_argv: Option<Vec<Vec<String>>>,
     pub session_shutdown_argv: Option<Vec<Vec<String>>>,
@@ -47,8 +49,10 @@ pub struct Hooks {
     after_user_prompt_submit: Vec<Hook>,
     before_model_request: Vec<Hook>,
     after_model_response_created: Vec<Hook>,
+    plan_finalized: Vec<Hook>,
     turn_started: Vec<Hook>,
     turn_completed: Vec<Hook>,
+    plan_implementation_completed: Vec<Hook>,
     turn_aborted: Vec<Hook>,
     session_start: Vec<Hook>,
     session_shutdown: Vec<Hook>,
@@ -74,8 +78,10 @@ impl Hooks {
             after_user_prompt_submit_argv,
             before_model_request_argv,
             after_model_response_created_argv,
+            plan_finalized_argv,
             turn_started_argv,
             turn_completed_argv,
+            plan_implementation_completed_argv,
             turn_aborted_argv,
             session_start_argv,
             session_shutdown_argv,
@@ -115,6 +121,12 @@ impl Hooks {
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
             .map(|argv| crate::json_payload_hook("after_model_response_created".to_string(), argv))
             .collect();
+        let plan_finalized = plan_finalized_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("plan_finalized".to_string(), argv))
+            .collect();
         let turn_started = turn_started_argv
             .into_iter()
             .flatten()
@@ -126,6 +138,12 @@ impl Hooks {
             .flatten()
             .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
             .map(|argv| crate::json_payload_hook("turn_completed".to_string(), argv))
+            .collect();
+        let plan_implementation_completed = plan_implementation_completed_argv
+            .into_iter()
+            .flatten()
+            .filter(|argv| !argv.is_empty() && !argv[0].is_empty())
+            .map(|argv| crate::json_payload_hook("plan_implementation_completed".to_string(), argv))
             .collect();
         let turn_aborted = turn_aborted_argv
             .into_iter()
@@ -196,8 +214,10 @@ impl Hooks {
             after_user_prompt_submit,
             before_model_request,
             after_model_response_created,
+            plan_finalized,
             turn_started,
             turn_completed,
+            plan_implementation_completed,
             turn_aborted,
             session_start,
             session_shutdown,
@@ -221,8 +241,10 @@ impl Hooks {
             HookEvent::AfterUserPromptSubmit { .. } => &self.after_user_prompt_submit,
             HookEvent::BeforeModelRequest { .. } => &self.before_model_request,
             HookEvent::AfterModelResponseCreated { .. } => &self.after_model_response_created,
+            HookEvent::PlanFinalized { .. } => &self.plan_finalized,
             HookEvent::TurnStarted { .. } => &self.turn_started,
             HookEvent::TurnCompleted { .. } => &self.turn_completed,
+            HookEvent::PlanImplementationCompleted { .. } => &self.plan_implementation_completed,
             HookEvent::TurnAborted { .. } => &self.turn_aborted,
             HookEvent::SessionStart { .. } => &self.session_start,
             HookEvent::SessionShutdown { .. } => &self.session_shutdown,
@@ -336,6 +358,7 @@ mod tests {
 
     use crate::Hook;
     use crate::HookEvent;
+    use crate::HookEventPlanFinalized;
     use crate::HookEventTurnCompleted;
     use crate::HookPayload;
     use crate::HookResult;
@@ -494,5 +517,83 @@ mod tests {
         assert_eq!(hooks.turn_completed.len(), 2);
         assert_eq!(hooks.turn_completed[0].name, "turn_completed");
         assert_eq!(hooks.turn_completed[1].name, "turn_completed");
+    }
+
+    #[test]
+    fn hooks_config_preserves_multiple_commands_for_plan_finalized() {
+        let hooks = Hooks::new(HooksConfig {
+            plan_finalized_argv: Some(vec![
+                vec!["/bin/echo".to_string(), "first".to_string()],
+                vec!["/bin/echo".to_string(), "second".to_string()],
+            ]),
+            ..HooksConfig::default()
+        });
+
+        assert_eq!(hooks.plan_finalized.len(), 2);
+        assert_eq!(hooks.plan_finalized[0].name, "plan_finalized");
+        assert_eq!(hooks.plan_finalized[1].name, "plan_finalized");
+    }
+
+    #[test]
+    fn hooks_config_preserves_multiple_commands_for_plan_implementation_completed() {
+        let hooks = Hooks::new(HooksConfig {
+            plan_implementation_completed_argv: Some(vec![
+                vec!["/bin/echo".to_string(), "first".to_string()],
+                vec!["/bin/echo".to_string(), "second".to_string()],
+            ]),
+            ..HooksConfig::default()
+        });
+
+        assert_eq!(hooks.plan_implementation_completed.len(), 2);
+        assert_eq!(
+            hooks.plan_implementation_completed[0].name,
+            "plan_implementation_completed"
+        );
+        assert_eq!(
+            hooks.plan_implementation_completed[1].name,
+            "plan_implementation_completed"
+        );
+    }
+
+    #[tokio::test]
+    async fn dispatch_uses_plan_finalized_hooks_for_plan_finalized_event() {
+        let calls = Arc::new(Mutex::new(Vec::new()));
+        let hooks = Hooks {
+            plan_finalized: vec![recording_hook(
+                "plan-finalized",
+                Arc::clone(&calls),
+                HookResult::Success,
+            )],
+            ..Hooks::default()
+        };
+        let payload = HookPayload {
+            session_id: ThreadId::new(),
+            cwd: PathBuf::from("/tmp"),
+            client: Some("codex-tui".to_string()),
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::PlanFinalized {
+                event: HookEventPlanFinalized {
+                    thread_id: ThreadId::new(),
+                    turn_id: "turn-1".to_string(),
+                    plan_id: "thread:turn-1".to_string(),
+                    plan_text: "Implement the feature".to_string(),
+                    parent_thread_id: None,
+                    original_user_request: Some("Implement the feature".to_string()),
+                    plan_summary: Some("Implement the feature".to_string()),
+                },
+            },
+        };
+
+        let outcomes = hooks.dispatch(payload).await;
+
+        assert_eq!(
+            calls.lock().await.clone(),
+            vec!["plan-finalized".to_string()]
+        );
+        assert_eq!(outcomes.len(), 1);
+        assert_eq!(outcomes[0].hook_name, "plan-finalized");
     }
 }

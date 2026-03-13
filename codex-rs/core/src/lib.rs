@@ -73,6 +73,7 @@ pub(crate) mod mentions {
     pub(crate) use crate::plugins::collect_explicit_plugin_mentions;
     pub(crate) use crate::plugins::collect_tool_mentions_from_messages;
 }
+mod project_memory;
 mod sandbox_tags;
 pub mod sandboxing;
 mod session_prefix;

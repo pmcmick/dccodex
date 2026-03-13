@@ -191,6 +191,8 @@ const PLAN_IMPLEMENTATION_YES: &str = "Yes, implement this plan";
 const PLAN_IMPLEMENTATION_NO: &str = "No, stay in Plan mode";
 const PLAN_IMPLEMENTATION_CODING_MESSAGE: &str = "Implement the plan.";
 const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
+const PLAN_IMPLEMENTATION_MESSAGE_PREAMBLE: &str = "Implement the finalized plan below as the authoritative spec. If earlier planning discussion conflicts with this plan, follow the plan.";
+const MULTI_AGENT_ENABLE_TITLE: &str = "Enable subagents?";
 const MULTI_AGENT_ENABLE_YES: &str = "Yes, enable";
 const MULTI_AGENT_ENABLE_NO: &str = "Not now";
 const MULTI_AGENT_ENABLE_NOTICE: &str = "Subagents will be enabled in the next session.";
@@ -504,6 +506,7 @@ pub(crate) struct ChatWidgetInit {
     pub(crate) frame_requester: FrameRequester,
     pub(crate) app_event_tx: AppEventSender,
     pub(crate) initial_user_message: Option<UserMessage>,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) enhanced_keys_supported: bool,
     pub(crate) auth_manager: Arc<AuthManager>,
     pub(crate) models_manager: Arc<ModelsManager>,
@@ -715,6 +718,8 @@ pub(crate) struct ChatWidget {
     plan_stream_controller: Option<PlanStreamController>,
     // Latest completed user-visible Codex output that `/copy` should place on the clipboard.
     last_copyable_output: Option<String>,
+    // Latest completed proposed plan text.
+    last_completed_plan: Option<String>,
     running_commands: HashMap<String, RunningCommand>,
     pending_collab_spawn_requests: HashMap<String, multi_agents::SpawnRequestSummary>,
     suppressed_exec_calls: HashSet<String>,
@@ -1678,6 +1683,7 @@ impl ChatWidget {
         };
         if !plan_text.trim().is_empty() {
             self.last_copyable_output = Some(plan_text.clone());
+            self.last_completed_plan = Some(plan_text.clone());
         }
         // Plan commit ticks can hide the status row; remember whether we streamed plan output so
         // completion can restore it once stream queues are idle.
@@ -1880,12 +1886,11 @@ impl ChatWidget {
     fn open_plan_implementation_prompt(&mut self) {
         let default_mask = collaboration_modes::default_mode_mask(self.models_manager.as_ref());
         let (implement_actions, implement_disabled_reason) = match default_mask {
-            Some(mask) => {
-                let user_text = PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
+            Some(_) => {
+                let user_text = self.plan_implementation_message();
                 let actions: Vec<SelectionAction> = vec![Box::new(move |tx| {
-                    tx.send(AppEvent::SubmitUserMessageWithMode {
+                    tx.send(AppEvent::StartChildSessionWithInitialMessage {
                         text: user_text.clone(),
-                        collaboration_mode: mask.clone(),
                     });
                 })];
                 (actions, None)
@@ -1895,7 +1900,9 @@ impl ChatWidget {
         let items = vec![
             SelectionItem {
                 name: PLAN_IMPLEMENTATION_YES.to_string(),
-                description: Some("Switch to Default and start coding.".to_string()),
+                description: Some(
+                    "Start a clean child thread in Default and start coding.".to_string(),
+                ),
                 selected_description: None,
                 is_current: false,
                 actions: implement_actions,
@@ -3674,6 +3681,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            parent_thread_id,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3692,7 +3700,12 @@ impl ChatWidget {
         let prevent_idle_sleep = config.features.enabled(Feature::PreventIdleSleep);
         let mut rng = rand::rng();
         let placeholder = PLACEHOLDERS[rng.random_range(0..PLACEHOLDERS.len())].to_string();
-        let codex_op_tx = spawn_agent(config.clone(), app_event_tx.clone(), thread_manager);
+        let codex_op_tx = spawn_agent(
+            config.clone(),
+            app_event_tx.clone(),
+            thread_manager,
+            parent_thread_id,
+        );
 
         let model_override = model.as_deref();
         let model_for_header = model
@@ -3755,6 +3768,7 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             last_copyable_output: None,
+            last_completed_plan: None,
             running_commands: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
@@ -3879,6 +3893,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            parent_thread_id: _,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -3959,6 +3974,7 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             last_copyable_output: None,
+            last_completed_plan: None,
             running_commands: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
@@ -4075,6 +4091,7 @@ impl ChatWidget {
             frame_requester,
             app_event_tx,
             initial_user_message,
+            parent_thread_id: _,
             enhanced_keys_supported,
             auth_manager,
             models_manager,
@@ -4155,6 +4172,7 @@ impl ChatWidget {
             stream_controller: None,
             plan_stream_controller: None,
             last_copyable_output: None,
+            last_completed_plan: None,
             running_commands: HashMap::new(),
             pending_collab_spawn_requests: HashMap::new(),
             suppressed_exec_calls: HashSet::new(),
@@ -8848,6 +8866,7 @@ impl ChatWidget {
         self.bottom_pane.composer_is_empty()
     }
 
+    #[cfg(test)]
     pub(crate) fn submit_user_message_with_mode(
         &mut self,
         text: String,
@@ -8880,6 +8899,19 @@ impl ChatWidget {
         } else {
             self.submit_user_message(user_message);
         }
+    }
+
+    fn plan_implementation_message(&self) -> String {
+        let Some(plan_text) = self
+            .last_completed_plan
+            .as_deref()
+            .map(str::trim)
+            .filter(|plan| !plan.is_empty())
+        else {
+            return PLAN_IMPLEMENTATION_CODING_MESSAGE.to_string();
+        };
+
+        format!("{PLAN_IMPLEMENTATION_MESSAGE_PREAMBLE}\n\n## Finalized Plan\n\n{plan_text}")
     }
 
     /// True when the UI is in the regular composer state with no running task,

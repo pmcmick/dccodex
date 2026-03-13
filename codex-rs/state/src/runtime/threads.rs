@@ -14,6 +14,8 @@ SELECT
     agent_nickname,
     agent_role,
     agent_path,
+    parent_thread_id,
+    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -351,6 +353,8 @@ SELECT
     agent_nickname,
     agent_role,
     agent_path,
+    parent_thread_id,
+    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -452,6 +456,8 @@ INSERT INTO threads (
     agent_nickname,
     agent_role,
     agent_path,
+    parent_thread_id,
+    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -468,7 +474,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -479,6 +485,8 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
+        .bind(metadata.agent_path.as_deref())
+        .bind(metadata.parent_thread_id.as_ref().map(ToString::to_string))
         .bind(metadata.agent_path.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.model.as_deref())
@@ -579,6 +587,8 @@ INSERT INTO threads (
     agent_nickname,
     agent_role,
     agent_path,
+    parent_thread_id,
+    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -595,7 +605,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -603,6 +613,8 @@ ON CONFLICT(id) DO UPDATE SET
     source = excluded.source,
     agent_nickname = excluded.agent_nickname,
     agent_role = excluded.agent_role,
+    agent_path = excluded.agent_path,
+    parent_thread_id = excluded.parent_thread_id,
     agent_path = excluded.agent_path,
     model_provider = excluded.model_provider,
     model = excluded.model,
@@ -628,6 +640,8 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
+        .bind(metadata.agent_path.as_deref())
+        .bind(metadata.parent_thread_id.as_ref().map(ToString::to_string))
         .bind(metadata.agent_path.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.model.as_deref())

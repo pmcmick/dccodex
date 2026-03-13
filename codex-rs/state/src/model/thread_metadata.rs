@@ -71,6 +71,8 @@ pub struct ThreadMetadata {
     pub agent_role: Option<String>,
     /// Optional canonical agent path assigned to an AgentControl-spawned sub-agent.
     pub agent_path: Option<String>,
+    /// Parent thread identifier for clean child sessions that do not inherit transcript history.
+    pub parent_thread_id: Option<ThreadId>,
     /// The model provider identifier.
     pub model_provider: String,
     /// The latest observed model for the thread.
@@ -120,6 +122,8 @@ pub struct ThreadMetadataBuilder {
     pub agent_role: Option<String>,
     /// Optional canonical agent path assigned to the session.
     pub agent_path: Option<String>,
+    /// Parent thread identifier for clean child sessions that do not inherit transcript history.
+    pub parent_thread_id: Option<ThreadId>,
     /// The model provider identifier, if known.
     pub model_provider: Option<String>,
     /// The working directory for the thread.
@@ -157,6 +161,8 @@ impl ThreadMetadataBuilder {
             agent_nickname: None,
             agent_role: None,
             agent_path: None,
+            parent_thread_id: None,
+            agent_path: None,
             model_provider: None,
             cwd: PathBuf::new(),
             cli_version: None,
@@ -191,6 +197,7 @@ impl ThreadMetadataBuilder {
                 .agent_path
                 .clone()
                 .or_else(|| self.source.get_agent_path().map(Into::into)),
+            parent_thread_id: self.parent_thread_id,
             model_provider: self
                 .model_provider
                 .clone()
@@ -253,6 +260,9 @@ impl ThreadMetadata {
         if self.agent_path != other.agent_path {
             diffs.push("agent_path");
         }
+        if self.parent_thread_id != other.parent_thread_id {
+            diffs.push("parent_thread_id");
+        }
         if self.model_provider != other.model_provider {
             diffs.push("model_provider");
         }
@@ -313,6 +323,7 @@ pub(crate) struct ThreadRow {
     agent_nickname: Option<String>,
     agent_role: Option<String>,
     agent_path: Option<String>,
+    parent_thread_id: Option<String>,
     model_provider: String,
     model: Option<String>,
     reasoning_effort: Option<String>,
@@ -340,6 +351,7 @@ impl ThreadRow {
             agent_nickname: row.try_get("agent_nickname")?,
             agent_role: row.try_get("agent_role")?,
             agent_path: row.try_get("agent_path")?,
+            parent_thread_id: row.try_get("parent_thread_id")?,
             model_provider: row.try_get("model_provider")?,
             model: row.try_get("model")?,
             reasoning_effort: row.try_get("reasoning_effort")?,
@@ -371,6 +383,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             agent_nickname,
             agent_role,
             agent_path,
+            parent_thread_id,
             model_provider,
             model,
             reasoning_effort,
@@ -395,6 +408,7 @@ impl TryFrom<ThreadRow> for ThreadMetadata {
             agent_nickname,
             agent_role,
             agent_path,
+            parent_thread_id: parent_thread_id.map(ThreadId::try_from).transpose()?,
             model_provider,
             model,
             reasoning_effort: reasoning_effort

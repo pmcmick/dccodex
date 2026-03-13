@@ -406,12 +406,7 @@ impl ThreadManager {
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.
-        Box::pin(self.start_thread_with_tools(
-            config,
-            Vec::new(),
-            /*persist_extended_history*/ false,
-        ))
-        .await
+        Box::pin(self.start_thread_with_parent(config, Vec::new(), false, None, None)).await
     }
 
     pub async fn start_thread_with_tools(
@@ -420,7 +415,7 @@ impl ThreadManager {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
     ) -> CodexResult<NewThread> {
-        Box::pin(self.start_thread_with_tools_and_service_name(
+        Box::pin(self.start_thread_with_parent(
             config,
             dynamic_tools,
             persist_extended_history,
@@ -446,8 +441,31 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
+            None,
             parent_trace,
             /*user_shell_override*/ None,
+        ))
+        .await
+    }
+
+    pub async fn start_thread_with_parent(
+        &self,
+        config: Config,
+        dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
+        persist_extended_history: bool,
+        metrics_service_name: Option<String>,
+        parent_thread_id: Option<ThreadId>,
+    ) -> CodexResult<NewThread> {
+        Box::pin(self.state.spawn_thread(
+            config,
+            InitialHistory::New,
+            Arc::clone(&self.state.auth_manager),
+            self.agent_control(),
+            dynamic_tools,
+            persist_extended_history,
+            metrics_service_name,
+            parent_thread_id,
+            None,
         ))
         .await
     }
@@ -486,6 +504,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            None,
             parent_trace,
             /*user_shell_override*/ None,
         ))
@@ -505,6 +524,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
@@ -527,6 +547,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
+            None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
@@ -634,6 +655,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
+            None,
             parent_trace,
             /*user_shell_override*/ None,
         ))
@@ -705,10 +727,11 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
-            /*persist_extended_history*/ false,
-            /*metrics_service_name*/ None,
-            /*inherited_shell_snapshot*/ None,
-            /*inherited_exec_policy*/ None,
+            false,
+            None,
+            None,
+            None,
+            None,
         ))
         .await
     }
@@ -723,6 +746,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        parent_thread_id: Option<ThreadId>,
     ) -> CodexResult<NewThread> {
         Box::pin(self.spawn_thread_with_source(
             config,
@@ -735,6 +759,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            parent_thread_id,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -807,6 +832,7 @@ impl ThreadManagerState {
         dynamic_tools: Vec<codex_protocol::dynamic_tools::DynamicToolSpec>,
         persist_extended_history: bool,
         metrics_service_name: Option<String>,
+        parent_thread_id: Option<ThreadId>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -819,8 +845,10 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            /*inherited_shell_snapshot*/ None,
-            /*inherited_exec_policy*/ None,
+            None,
+            None,
+            parent_thread_id,
+            None,
             parent_trace,
             user_shell_override,
         ))
@@ -840,6 +868,7 @@ impl ThreadManagerState {
         metrics_service_name: Option<String>,
         inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
         inherited_exec_policy: Option<Arc<crate::exec_policy::ExecPolicyManager>>,
+        parent_thread_id: Option<ThreadId>,
         parent_trace: Option<W3cTraceContext>,
         user_shell_override: Option<crate::shell::Shell>,
     ) -> CodexResult<NewThread> {
@@ -867,6 +896,7 @@ impl ThreadManagerState {
             metrics_service_name,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            parent_thread_id,
             user_shell_override,
             parent_trace,
         })

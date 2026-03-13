@@ -2263,6 +2263,22 @@ impl InitialHistory {
         }
     }
 
+    pub fn parent_thread_id(&self) -> Option<ThreadId> {
+        match self {
+            InitialHistory::New => None,
+            InitialHistory::Resumed(resumed) => {
+                resumed.history.iter().find_map(|item| match item {
+                    RolloutItem::SessionMeta(meta_line) => meta_line.meta.parent_thread_id,
+                    _ => None,
+                })
+            }
+            InitialHistory::Forked(items) => items.iter().find_map(|item| match item {
+                RolloutItem::SessionMeta(meta_line) => meta_line.meta.parent_thread_id,
+                _ => None,
+            }),
+        }
+    }
+
     pub fn session_cwd(&self) -> Option<PathBuf> {
         match self {
             InitialHistory::New => None,
@@ -2493,6 +2509,8 @@ pub struct SessionMeta {
     pub id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<ThreadId>,
     pub timestamp: String,
     pub cwd: PathBuf,
     pub originator: String,
@@ -2524,6 +2542,7 @@ impl Default for SessionMeta {
         SessionMeta {
             id: ThreadId::default(),
             forked_from_id: None,
+            parent_thread_id: None,
             timestamp: String::new(),
             cwd: PathBuf::new(),
             originator: String::new(),
@@ -3220,6 +3239,8 @@ pub struct SessionConfiguredEvent {
     pub session_id: ThreadId,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub forked_from_id: Option<ThreadId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<ThreadId>,
 
     /// Optional user-facing thread name (may be unset).
     #[serde(default, skip_serializing_if = "Option::is_none")]

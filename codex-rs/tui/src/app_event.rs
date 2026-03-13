@@ -502,10 +502,10 @@ pub(crate) enum AppEvent {
     /// Open the custom prompt option from the review popup.
     OpenReviewCustomPrompt,
 
-    /// Submit a user message with an explicit collaboration mask.
-    SubmitUserMessageWithMode {
+    /// Start a fresh child session and submit the provided message as the
+    /// first user turn.
+    StartChildSessionWithInitialMessage {
         text: String,
-        collaboration_mode: CollaborationModeMask,
     },
 
     /// Open the approval popup.

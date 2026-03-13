@@ -162,6 +162,21 @@ pub struct HookEventAfterModelResponseCompleted {
 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
+pub struct HookEventPlanFinalized {
+    pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub plan_id: String,
+    pub plan_text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub parent_thread_id: Option<ThreadId>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original_user_request: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub plan_summary: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub struct HookEventTurnStarted {
     pub thread_id: ThreadId,
     pub turn_id: String,
@@ -173,6 +188,15 @@ pub struct HookEventTurnStarted {
 #[serde(rename_all = "snake_case")]
 pub struct HookEventTurnCompleted {
     pub thread_id: ThreadId,
+    pub turn_id: String,
+    pub last_agent_message: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub struct HookEventPlanImplementationCompleted {
+    pub thread_id: ThreadId,
+    pub parent_thread_id: ThreadId,
     pub turn_id: String,
     pub last_agent_message: Option<String>,
 }
@@ -360,6 +384,10 @@ pub enum HookEvent {
         #[serde(flatten)]
         event: HookEventAfterModelResponseCreated,
     },
+    PlanFinalized {
+        #[serde(flatten)]
+        event: HookEventPlanFinalized,
+    },
     TurnStarted {
         #[serde(flatten)]
         event: HookEventTurnStarted,
@@ -367,6 +395,10 @@ pub enum HookEvent {
     TurnCompleted {
         #[serde(flatten)]
         event: HookEventTurnCompleted,
+    },
+    PlanImplementationCompleted {
+        #[serde(flatten)]
+        event: HookEventPlanImplementationCompleted,
     },
     TurnAborted {
         #[serde(flatten)]
@@ -420,6 +452,8 @@ mod tests {
     use super::HookEvent;
     use super::HookEventAfterAgent;
     use super::HookEventAfterToolUse;
+    use super::HookEventPlanFinalized;
+    use super::HookEventPlanImplementationCompleted;
     use super::HookPayload;
     use super::HookToolInput;
     use super::HookToolInputLocalShell;
@@ -532,6 +566,99 @@ mod tests {
                 "sandbox": "none",
                 "sandbox_policy": "danger-full-access",
                 "output_preview": "ok",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn plan_finalized_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id =
+            ThreadId::from_string("b5f6c1c2-1111-2222-3333-444455556666").expect("valid thread id");
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: Some("codex-tui".to_string()),
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::PlanFinalized {
+                event: HookEventPlanFinalized {
+                    thread_id,
+                    turn_id: "turn-123".to_string(),
+                    plan_id: format!("{thread_id}:turn-123"),
+                    plan_text: "1. Add hooks\n2. Wire completion".to_string(),
+                    parent_thread_id: Some(
+                        ThreadId::from_string("11111111-2222-3333-4444-555555555555")
+                            .expect("valid thread id"),
+                    ),
+                    original_user_request: Some("Add plan lifecycle hooks".to_string()),
+                    plan_summary: Some("Add hooks".to_string()),
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "client": "codex-tui",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "plan_finalized",
+                "thread_id": thread_id.to_string(),
+                "turn_id": "turn-123",
+                "plan_id": format!("{thread_id}:turn-123"),
+                "plan_text": "1. Add hooks\n2. Wire completion",
+                "parent_thread_id": "11111111-2222-3333-4444-555555555555",
+                "original_user_request": "Add plan lifecycle hooks",
+                "plan_summary": "Add hooks",
+            },
+        });
+
+        assert_eq!(actual, expected);
+    }
+
+    #[test]
+    fn plan_implementation_completed_payload_serializes_stable_wire_shape() {
+        let session_id = ThreadId::new();
+        let thread_id =
+            ThreadId::from_string("b5f6c1c2-1111-2222-3333-444455556666").expect("valid thread id");
+        let parent_thread_id =
+            ThreadId::from_string("11111111-2222-3333-4444-555555555555").expect("valid thread id");
+        let payload = HookPayload {
+            session_id,
+            cwd: PathBuf::from("tmp"),
+            client: Some("codex-tui".to_string()),
+            triggered_at: Utc
+                .with_ymd_and_hms(2025, 1, 1, 0, 0, 0)
+                .single()
+                .expect("valid timestamp"),
+            hook_event: HookEvent::PlanImplementationCompleted {
+                event: HookEventPlanImplementationCompleted {
+                    thread_id,
+                    parent_thread_id,
+                    turn_id: "turn-456".to_string(),
+                    last_agent_message: Some("Implemented and verified.".to_string()),
+                },
+            },
+        };
+
+        let actual = serde_json::to_value(payload).expect("serialize hook payload");
+        let expected = json!({
+            "session_id": session_id.to_string(),
+            "cwd": "tmp",
+            "client": "codex-tui",
+            "triggered_at": "2025-01-01T00:00:00Z",
+            "hook_event": {
+                "event_type": "plan_implementation_completed",
+                "thread_id": thread_id.to_string(),
+                "parent_thread_id": parent_thread_id.to_string(),
+                "turn_id": "turn-456",
+                "last_agent_message": "Implemented and verified.",
             },
         });
 

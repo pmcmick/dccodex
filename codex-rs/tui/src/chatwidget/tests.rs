@@ -201,6 +201,7 @@ async fn resumed_initial_messages_render_history() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -314,6 +315,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -375,6 +377,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -443,6 +446,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -486,6 +490,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -539,6 +544,7 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -651,6 +657,7 @@ async fn submission_preserves_text_elements_and_local_images() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -735,6 +742,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -830,6 +838,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -895,6 +904,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -935,6 +945,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -975,6 +986,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -1018,6 +1030,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -1914,6 +1927,7 @@ async fn helpers_are_available_and_do_not_panic() {
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: tx,
         initial_user_message: None,
+        parent_thread_id: None,
         enhanced_keys_supported: false,
         auth_manager,
         models_manager: thread_manager.get_models_manager(),
@@ -2023,6 +2037,7 @@ async fn make_chatwidget_manual(
         plan_stream_controller: None,
         pending_guardian_review_status: PendingGuardianReviewStatus::default(),
         last_copyable_output: None,
+        last_completed_plan: None,
         running_commands: HashMap::new(),
         pending_collab_spawn_requests: HashMap::new(),
         suppressed_exec_calls: HashSet::new(),
@@ -2637,22 +2652,21 @@ async fn plan_implementation_popup_no_selected_snapshot() {
 }
 
 #[tokio::test]
-async fn plan_implementation_popup_yes_emits_submit_message_event() {
+async fn plan_implementation_popup_yes_emits_fork_and_submit_message_event() {
     let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(Some("gpt-5")).await;
+    chat.on_plan_item_completed("- Step 1\n- Step 2\n".to_string());
+    let _ = rx.try_recv().expect("expected proposed plan history cell");
     chat.open_plan_implementation_prompt();
 
     chat.handle_key_event(KeyEvent::from(KeyCode::Enter));
 
     let event = rx.try_recv().expect("expected AppEvent");
-    let AppEvent::SubmitUserMessageWithMode {
-        text,
-        collaboration_mode,
-    } = event
-    else {
-        panic!("expected SubmitUserMessageWithMode, got {event:?}");
+    let AppEvent::StartChildSessionWithInitialMessage { text } = event else {
+        panic!("expected StartChildSessionWithInitialMessage, got {event:?}");
     };
-    assert_eq!(text, PLAN_IMPLEMENTATION_CODING_MESSAGE);
-    assert_eq!(collaboration_mode.mode, Some(ModeKind::Default));
+    assert!(text.contains(PLAN_IMPLEMENTATION_MESSAGE_PREAMBLE));
+    assert!(text.contains("## Finalized Plan"));
+    assert!(text.contains("- Step 1\n- Step 2"));
 }
 
 #[tokio::test]
@@ -4672,6 +4686,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -5991,6 +6006,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -6057,6 +6073,7 @@ async fn collaboration_modes_defaults_to_code_on_startup() {
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
+        parent_thread_id: None,
         enhanced_keys_supported: false,
         auth_manager,
         models_manager: thread_manager.get_models_manager(),
@@ -6108,6 +6125,7 @@ async fn experimental_mode_plan_is_ignored_on_startup() {
         frame_requester: FrameRequester::test_dummy(),
         app_event_tx: AppEventSender::new(unbounded_channel::<AppEvent>().0),
         initial_user_message: None,
+        parent_thread_id: None,
         enhanced_keys_supported: false,
         auth_manager,
         models_manager: thread_manager.get_models_manager(),
