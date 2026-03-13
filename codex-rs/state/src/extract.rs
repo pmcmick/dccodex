@@ -50,6 +50,7 @@ fn apply_session_meta_from_item(metadata: &mut ThreadMetadata, meta_line: &Sessi
     metadata.source = enum_to_string(&meta_line.meta.source);
     metadata.agent_nickname = meta_line.meta.agent_nickname.clone();
     metadata.agent_role = meta_line.meta.agent_role.clone();
+    metadata.parent_thread_id = meta_line.meta.parent_thread_id;
     if let Some(provider) = meta_line.meta.model_provider.as_deref() {
         metadata.model_provider = provider.to_string();
     }
@@ -243,6 +244,7 @@ mod tests {
                     forked_from_id: Some(
                         ThreadId::from_string(&Uuid::now_v7().to_string()).expect("thread id"),
                     ),
+                    parent_thread_id: None,
                     timestamp: "2026-02-26T00:00:00.000Z".to_string(),
                     cwd: PathBuf::from("/child/worktree"),
                     originator: "codex_cli_rs".to_string(),

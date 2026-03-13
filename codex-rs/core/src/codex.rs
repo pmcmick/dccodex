@@ -61,6 +61,16 @@ use codex_app_server_protocol::McpServerElicitationRequest;
 use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
+use codex_hooks::HookEventAfterModelResponseCompleted;
+use codex_hooks::HookEventAfterModelResponseCreated;
+use codex_hooks::HookEventBeforeModelRequest;
+use codex_hooks::HookEventPlanFinalized;
+use codex_hooks::HookEventPlanImplementationCompleted;
+use codex_hooks::HookEventSessionShutdown;
+use codex_hooks::HookEventSessionStart;
+use codex_hooks::HookEventTurnAborted;
+use codex_hooks::HookEventTurnCompleted;
+use codex_hooks::HookEventTurnStarted;
 use codex_hooks::HookPayload;
 use codex_hooks::HookResult;
 use codex_hooks::Hooks;
@@ -225,6 +235,7 @@ use crate::plugins::PluginsManager;
 use crate::plugins::build_plugin_injections;
 use crate::plugins::render_plugins_section;
 use crate::project_doc::get_user_instructions;
+use crate::project_memory::load_project_memory;
 use crate::protocol::AgentMessageContentDeltaEvent;
 use crate::protocol::AgentReasoningSectionBreakEvent;
 use crate::protocol::ApplyPatchApprovalRequestEvent;
@@ -371,6 +382,7 @@ pub(crate) struct CodexSpawnArgs {
     pub(crate) persist_extended_history: bool,
     pub(crate) metrics_service_name: Option<String>,
     pub(crate) inherited_shell_snapshot: Option<Arc<ShellSnapshot>>,
+    pub(crate) parent_thread_id: Option<ThreadId>,
     pub(crate) parent_trace: Option<W3cTraceContext>,
 }
 
@@ -422,6 +434,7 @@ impl Codex {
             persist_extended_history,
             metrics_service_name,
             inherited_shell_snapshot,
+            parent_thread_id,
             parent_trace: _,
         } = args;
         let (tx_sub, rx_sub) = async_channel::bounded(SUBMISSION_CHANNEL_CAPACITY);
@@ -569,6 +582,7 @@ impl Codex {
             cwd: config.cwd.clone(),
             codex_home: config.codex_home.clone(),
             thread_name: None,
+            parent_thread_id,
             original_config_do_not_use: Arc::clone(&config),
             metrics_service_name,
             app_server_client_name: None,
@@ -753,6 +767,94 @@ pub(crate) struct Session {
     pub(crate) services: SessionServices,
     js_repl: Arc<JsReplHandle>,
     next_internal_sub_id: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AutoPlanModeTrigger {
+    ExplicitRequest,
+    ComplexityHeuristic,
+}
+
+impl AutoPlanModeTrigger {
+    fn warning_message(self) -> &'static str {
+        match self {
+            Self::ExplicitRequest => {
+                "Automatically switched this turn to Plan mode based on your request to plan first."
+            }
+            Self::ComplexityHeuristic => {
+                "Automatically switched this turn to Plan mode because the request looks complex enough to benefit from planning."
+            }
+        }
+    }
+}
+
+fn detect_auto_plan_mode_trigger(input_messages: &[String]) -> Option<AutoPlanModeTrigger> {
+    if input_messages.is_empty() {
+        return None;
+    }
+
+    let normalized = input_messages
+        .iter()
+        .map(|message| message.trim().to_lowercase())
+        .filter(|message| !message.is_empty())
+        .collect::<Vec<_>>();
+    if normalized.is_empty() {
+        return None;
+    }
+
+    let combined = normalized.join("\n");
+    let explicit_phrases = [
+        "i'd like to create a plan",
+        "i would like to create a plan",
+        "let's create a plan",
+        "lets create a plan",
+        "let's make a plan",
+        "lets make a plan",
+        "make a plan",
+        "create a plan",
+        "let's plan this",
+        "lets plan this",
+        "plan this first",
+        "before coding, plan this",
+        "before implementing, plan this",
+        "scope this out",
+        "let's scope this out",
+        "lets scope this out",
+    ];
+    if explicit_phrases
+        .iter()
+        .any(|phrase| combined.contains(phrase))
+    {
+        return Some(AutoPlanModeTrigger::ExplicitRequest);
+    }
+
+    let complexity_indicators = [
+        "architecture",
+        "architectural",
+        "refactor",
+        "migration",
+        "rollout",
+        "multi-step",
+        "multiple steps",
+        "step by step",
+        "step-by-step",
+        "end-to-end",
+        "multiple files",
+        "multi-file",
+        "cross-cutting",
+        "design this",
+        "approach this",
+        "strategy for",
+    ];
+    let complexity_matches = complexity_indicators
+        .iter()
+        .filter(|indicator| combined.contains(**indicator))
+        .count();
+    if complexity_matches >= 2 || (combined.len() >= 320 && complexity_matches >= 1) {
+        return Some(AutoPlanModeTrigger::ComplexityHeuristic);
+    }
+
+    None
 }
 
 #[derive(Clone, Debug)]
@@ -1025,6 +1127,7 @@ pub(crate) struct SessionConfiguration {
     codex_home: PathBuf,
     /// Optional user-facing name for the thread, updated during the session.
     thread_name: Option<String>,
+    parent_thread_id: Option<ThreadId>,
 
     // TODO(pakrym): Remove config from here
     original_config_do_not_use: Arc<Config>,
@@ -1056,6 +1159,7 @@ impl SessionConfiguration {
             reasoning_effort: self.collaboration_mode.reasoning_effort(),
             personality: self.personality,
             session_source: self.session_source.clone(),
+            parent_thread_id: self.parent_thread_id,
         }
     }
 
@@ -1395,6 +1499,9 @@ impl Session {
         }
 
         let forked_from_id = initial_history.forked_from_id();
+        let parent_thread_id = session_configuration
+            .parent_thread_id
+            .or_else(|| initial_history.parent_thread_id());
 
         let (conversation_id, rollout_params) = match &initial_history {
             InitialHistory::New | InitialHistory::Forked(_) => {
@@ -1404,6 +1511,7 @@ impl Session {
                     RolloutRecorderParams::new(
                         conversation_id,
                         forked_from_id,
+                        parent_thread_id,
                         session_source,
                         BaseInstructions {
                             text: session_configuration.base_instructions.clone(),
@@ -1727,6 +1835,24 @@ impl Session {
         let _ = hook_shell_argv.pop();
         let hooks = Hooks::new(HooksConfig {
             legacy_notify_argv: config.notify.clone(),
+            after_user_prompt_submit_argv: config.notify_on_user_prompt_submit.clone(),
+            before_model_request_argv: config.notify_on_before_model_request.clone(),
+            after_model_response_created_argv: config.notify_on_model_response_created.clone(),
+            plan_finalized_argv: config.notify_on_plan_finalized.clone(),
+            turn_started_argv: config.notify_on_turn_started.clone(),
+            turn_completed_argv: config.notify_on_turn_completed.clone(),
+            plan_implementation_completed_argv: config
+                .notify_on_plan_implementation_completed
+                .clone(),
+            turn_aborted_argv: config.notify_on_turn_aborted.clone(),
+            session_start_argv: config.notify_on_session_start.clone(),
+            session_shutdown_argv: config.notify_on_session_shutdown.clone(),
+            compaction_argv: config.notify_on_compaction.clone(),
+            after_tool_use_argv: config.notify_on_after_tool_use.clone(),
+            pre_tool_use_argv: config.notify_on_pre_tool_use.clone(),
+            tool_failure_argv: config.notify_on_tool_failure.clone(),
+            post_tool_use_success_argv: config.notify_on_post_tool_use_success.clone(),
+            after_model_response_completed_argv: config.notify_on_model_response_completed.clone(),
             feature_enabled: config.features.enabled(Feature::CodexHooks),
             config_layer_stack: Some(config.config_layer_stack.clone()),
             shell_program: Some(hook_shell_program),
@@ -1830,6 +1956,7 @@ impl Session {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: conversation_id,
                 forked_from_id,
+                parent_thread_id,
                 thread_name: session_configuration.thread_name.clone(),
                 model: session_configuration.collaboration_mode.model().to_string(),
                 model_provider_id: config.model_provider_id.clone(),
@@ -2572,6 +2699,70 @@ impl Session {
             msg,
         };
         self.send_event_raw(event).await;
+        let turn_hook_event = match &legacy_source {
+            EventMsg::TurnStarted(event) => Some(HookEvent::TurnStarted {
+                event: HookEventTurnStarted {
+                    thread_id: self.conversation_id,
+                    turn_id: event.turn_id.clone(),
+                    model_context_window: event.model_context_window,
+                    collaboration_mode_kind: event.collaboration_mode_kind,
+                },
+            }),
+            EventMsg::TurnComplete(event) => Some(HookEvent::TurnCompleted {
+                event: HookEventTurnCompleted {
+                    thread_id: self.conversation_id,
+                    turn_id: event.turn_id.clone(),
+                    last_agent_message: event.last_agent_message.clone(),
+                },
+            }),
+            EventMsg::TurnAborted(event) => Some(HookEvent::TurnAborted {
+                event: HookEventTurnAborted {
+                    thread_id: self.conversation_id,
+                    turn_id: event.turn_id.clone(),
+                    reason: event.reason.clone(),
+                },
+            }),
+            _ => None,
+        };
+        if let Some(hook_event) = turn_hook_event {
+            let hook_event_name = match &hook_event {
+                HookEvent::TurnStarted { .. } => "turn_started",
+                HookEvent::TurnCompleted { .. } => "turn_completed",
+                HookEvent::TurnAborted { .. } => "turn_aborted",
+                _ => unreachable!("unexpected hook event variant"),
+            };
+            self.dispatch_non_blocking_hook_event(
+                hook_event_name,
+                hook_event,
+                turn_context.cwd.clone(),
+                turn_context.app_server_client_name.clone(),
+                Some(turn_context.sub_id.as_str()),
+            )
+            .await;
+        }
+        if let EventMsg::TurnComplete(event) = &legacy_source {
+            let parent_thread_id = {
+                let state = self.state.lock().await;
+                state.session_configuration.parent_thread_id
+            };
+            if let Some(parent_thread_id) = parent_thread_id {
+                self.dispatch_non_blocking_hook_event(
+                    "plan_implementation_completed",
+                    HookEvent::PlanImplementationCompleted {
+                        event: HookEventPlanImplementationCompleted {
+                            thread_id: self.conversation_id,
+                            parent_thread_id,
+                            turn_id: event.turn_id.clone(),
+                            last_agent_message: event.last_agent_message.clone(),
+                        },
+                    },
+                    turn_context.cwd.clone(),
+                    turn_context.app_server_client_name.clone(),
+                    Some(event.turn_id.as_str()),
+                )
+                .await;
+            }
+        }
         self.maybe_mirror_event_text_to_realtime(&legacy_source)
             .await;
         self.maybe_clear_realtime_handoff_for_event(&legacy_source)
@@ -3447,7 +3638,7 @@ impl Session {
         turn_context: &TurnContext,
     ) -> Vec<ResponseItem> {
         let mut developer_sections = Vec::<String>::with_capacity(8);
-        let mut contextual_user_sections = Vec::<String>::with_capacity(2);
+        let mut contextual_user_sections = Vec::<String>::with_capacity(3);
         let shell = self.user_shell();
         let (
             reference_context_item,
@@ -3581,6 +3772,11 @@ impl Session {
                 .with_subagents(subagents)
                 .serialize_to_xml(),
         );
+        if let Some(project_memory) =
+            load_project_memory(&turn_context.config.codex_home, &turn_context.cwd).await
+        {
+            contextual_user_sections.push(project_memory.serialize_to_text());
+        }
 
         let mut items = Vec::with_capacity(3);
         if let Some(developer_message) =
@@ -4438,6 +4634,9 @@ mod handlers {
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
+    use crate::codex::detect_auto_plan_mode_trigger;
+    use crate::codex::dispatch_hook_payload;
+    use crate::features::Feature;
 
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
@@ -4571,7 +4770,164 @@ mod handlers {
             ),
             _ => unreachable!(),
         };
-
+        let input_messages = items
+            .iter()
+            .filter_map(|item| match item {
+                UserInput::Text { text, .. } => Some(text.clone()),
+                _ => None,
+            })
+            .collect::<Vec<String>>();
+        let (hook_cwd, hook_client) = {
+            let state = sess.state.lock().await;
+            match state.session_configuration.clone().apply(&updates) {
+                Ok(next_configuration) => (
+                    next_configuration.cwd,
+                    next_configuration.app_server_client_name,
+                ),
+                Err(err) => {
+                    sess.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message: err.to_string(),
+                            codex_error_info: Some(CodexErrorInfo::BadRequest),
+                        }),
+                    })
+                    .await;
+                    return;
+                }
+            }
+        };
+        let auto_plan_mode_trigger = if sess.features.enabled(Feature::CollaborationModes) {
+            let parent_thread_id = {
+                let state = sess.state.lock().await;
+                state.session_configuration.parent_thread_id
+            };
+            if parent_thread_id.is_none() {
+                detect_auto_plan_mode_trigger(&input_messages)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+        let hook_outcomes = dispatch_hook_payload(
+            sess.as_ref(),
+            "after_user_prompt_submit",
+            HookPayload {
+                session_id: sess.conversation_id,
+                cwd: hook_cwd,
+                client: hook_client,
+                triggered_at: chrono::Utc::now(),
+                hook_event: HookEvent::AfterUserPromptSubmit {
+                    event: HookEventAfterUserPromptSubmit {
+                        thread_id: sess.conversation_id,
+                        turn_id: sub_id.clone(),
+                        input_messages,
+                    },
+                },
+            },
+            Some(sub_id.as_str()),
+        )
+        .await;
+        let mut appended_prompt_texts = Vec::new();
+        let mut hook_requests_plan_mode = false;
+        for hook_outcome in hook_outcomes {
+            let hook_name = hook_outcome.hook_name;
+            match hook_outcome.result {
+                HookResult::Success => {
+                    debug!(
+                        turn_id = %sub_id,
+                        hook_event = "after_user_prompt_submit",
+                        hook_name = %hook_name,
+                        "hook completed"
+                    );
+                }
+                HookResult::SuccessWithPromptAugmentation {
+                    append_prompt_text,
+                    switch_to_plan_mode,
+                } => {
+                    debug!(
+                        turn_id = %sub_id,
+                        hook_event = "after_user_prompt_submit",
+                        hook_name = %hook_name,
+                        switch_to_plan_mode,
+                        appended_prompt_text_present = append_prompt_text.is_some(),
+                        "hook completed with prompt augmentation"
+                    );
+                    if let Some(text) = append_prompt_text
+                        && !text.is_empty()
+                    {
+                        appended_prompt_texts.push(text);
+                    }
+                    hook_requests_plan_mode |= switch_to_plan_mode;
+                }
+                HookResult::SuccessWithPreToolUseDecision(decision) => {
+                    debug!(
+                        turn_id = %sub_id,
+                        hook_event = "after_user_prompt_submit",
+                        hook_name = %hook_name,
+                        ?decision,
+                        "hook completed with pre-tool decision"
+                    );
+                }
+                HookResult::FailedContinue(error) => {
+                    warn!(
+                        turn_id = %sub_id,
+                        hook_name = %hook_name,
+                        error = %error,
+                        "after_user_prompt_submit hook failed; continuing"
+                    );
+                }
+                HookResult::FailedAbort(error) => {
+                    let message = format!(
+                        "after_user_prompt_submit hook '{hook_name}' failed and aborted turn submission: {error}"
+                    );
+                    warn!(
+                        turn_id = %sub_id,
+                        hook_name = %hook_name,
+                        error = %error,
+                        "after_user_prompt_submit hook failed; aborting operation"
+                    );
+                    sess.send_event_raw(Event {
+                        id: sub_id.clone(),
+                        msg: EventMsg::Error(ErrorEvent {
+                            message,
+                            codex_error_info: None,
+                        }),
+                    })
+                    .await;
+                    return;
+                }
+            }
+        }
+        if sess.features.enabled(Feature::CollaborationModes)
+            && (hook_requests_plan_mode || auto_plan_mode_trigger.is_some())
+            && let Some(current_mode) = updates.collaboration_mode.clone()
+            && current_mode.mode == ModeKind::Default
+            && let Some(plan_mask) = sess
+                .services
+                .models_manager
+                .list_collaboration_modes()
+                .into_iter()
+                .find(|mask| mask.mode == Some(ModeKind::Plan))
+        {
+            debug!(
+                turn_id = %sub_id,
+                hook_requests_plan_mode,
+                auto_plan_mode_trigger = ?auto_plan_mode_trigger,
+                "switching submitted turn to Plan mode"
+            );
+            updates.collaboration_mode = Some(current_mode.apply_mask(&plan_mask));
+            if let Some(trigger) = auto_plan_mode_trigger {
+                sess.send_event_raw(Event {
+                    id: sub_id.clone(),
+                    msg: EventMsg::Warning(WarningEvent {
+                        message: trigger.warning_message().to_string(),
+                    }),
+                })
+                .await;
+            }
+        }
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
             // new_turn_with_sub_id already emits the error event.
             return;
@@ -7344,6 +7700,212 @@ async fn try_run_sampling_request(
                 should_emit_turn_diff = true;
 
                 needs_follow_up |= sess.has_pending_input().await;
+                let hook_outcomes = dispatch_hook_payload(
+                    sess.as_ref(),
+                    "after_model_response_completed",
+                    HookPayload {
+                        session_id: sess.conversation_id,
+                        cwd: turn_context.cwd.clone(),
+                        client: turn_context.app_server_client_name.clone(),
+                        triggered_at: chrono::Utc::now(),
+                        hook_event: HookEvent::AfterModelResponseCompleted {
+                            event: HookEventAfterModelResponseCompleted {
+                                thread_id: sess.conversation_id,
+                                turn_id: turn_context.sub_id.clone(),
+                                response_id,
+                                token_usage: token_usage.clone(),
+                                needs_follow_up,
+                                proposed_plan: proposed_plan.clone(),
+                            },
+                        },
+                    },
+                    Some(turn_context.sub_id.as_str()),
+                )
+                .await;
+                let mut abort_message = None;
+                for hook_outcome in hook_outcomes {
+                    let hook_name = hook_outcome.hook_name;
+                    match hook_outcome.result {
+                        HookResult::Success => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_completed",
+                                hook_name = %hook_name,
+                                "hook completed"
+                            );
+                        }
+                        HookResult::SuccessWithPromptAugmentation {
+                            append_prompt_text,
+                            switch_to_plan_mode,
+                        } => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_completed",
+                                hook_name = %hook_name,
+                                switch_to_plan_mode,
+                                appended_prompt_text_present = append_prompt_text.is_some(),
+                                "hook completed with prompt augmentation"
+                            );
+                        }
+                        HookResult::SuccessWithPreToolUseDecision(decision) => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_completed",
+                                hook_name = %hook_name,
+                                ?decision,
+                                "hook completed with pre-tool decision"
+                            );
+                        }
+                        HookResult::FailedContinue(error) => {
+                            warn!(
+                                turn_id = %turn_context.sub_id,
+                                hook_name = %hook_name,
+                                error = %error,
+                                "after_model_response_completed hook failed; continuing"
+                            );
+                        }
+                        HookResult::FailedAbort(error) => {
+                            let message = format!(
+                                "after_model_response_completed hook '{hook_name}' failed and aborted response completion: {error}"
+                            );
+                            warn!(
+                                turn_id = %turn_context.sub_id,
+                                hook_name = %hook_name,
+                                error = %error,
+                                "after_model_response_completed hook failed; aborting operation"
+                            );
+                            if abort_message.is_none() {
+                                abort_message = Some(message);
+                            }
+                            break;
+                        }
+                    }
+                }
+                if abort_message.is_none()
+                    && let Some(plan_text) = proposed_plan.clone()
+                {
+                    let parent_thread_id = {
+                        let state = sess.state.lock().await;
+                        state.session_configuration.parent_thread_id
+                    };
+                    let history = sess.clone_history().await;
+                    let original_user_request = collect_user_messages(history.raw_items())
+                        .into_iter()
+                        .next();
+                    let plan_summary = plan_text
+                        .lines()
+                        .map(str::trim)
+                        .find(|line| !line.is_empty())
+                        .map(|line| {
+                            line.trim_start_matches(|c: char| {
+                                c == '#'
+                                    || c == '-'
+                                    || c == '*'
+                                    || c == '.'
+                                    || c == ')'
+                                    || c.is_ascii_digit()
+                                    || c.is_whitespace()
+                            })
+                            .trim()
+                            .to_string()
+                        })
+                        .filter(|line| !line.is_empty());
+                    let hook_outcomes = dispatch_hook_payload(
+                        sess.as_ref(),
+                        "plan_finalized",
+                        HookPayload {
+                            session_id: sess.conversation_id,
+                            cwd: turn_context.cwd.clone(),
+                            client: turn_context.app_server_client_name.clone(),
+                            triggered_at: chrono::Utc::now(),
+                            hook_event: HookEvent::PlanFinalized {
+                                event: HookEventPlanFinalized {
+                                    thread_id: sess.conversation_id,
+                                    turn_id: turn_context.sub_id.clone(),
+                                    plan_id: format!(
+                                        "{}:{}",
+                                        sess.conversation_id, turn_context.sub_id
+                                    ),
+                                    plan_text,
+                                    parent_thread_id,
+                                    original_user_request,
+                                    plan_summary,
+                                },
+                            },
+                        },
+                        Some(turn_context.sub_id.as_str()),
+                    )
+                    .await;
+                    for hook_outcome in hook_outcomes {
+                        let hook_name = hook_outcome.hook_name;
+                        match hook_outcome.result {
+                            HookResult::Success => {
+                                debug!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_event = "plan_finalized",
+                                    hook_name = %hook_name,
+                                    "hook completed"
+                                );
+                            }
+                            HookResult::SuccessWithPromptAugmentation {
+                                append_prompt_text,
+                                switch_to_plan_mode,
+                            } => {
+                                debug!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_event = "plan_finalized",
+                                    hook_name = %hook_name,
+                                    switch_to_plan_mode,
+                                    appended_prompt_text_present = append_prompt_text.is_some(),
+                                    "hook completed with prompt augmentation"
+                                );
+                            }
+                            HookResult::SuccessWithPreToolUseDecision(decision) => {
+                                debug!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_event = "plan_finalized",
+                                    hook_name = %hook_name,
+                                    ?decision,
+                                    "hook completed with pre-tool decision"
+                                );
+                            }
+                            HookResult::FailedContinue(error) => {
+                                warn!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_name = %hook_name,
+                                    error = %error,
+                                    "plan_finalized hook failed; continuing"
+                                );
+                            }
+                            HookResult::FailedAbort(error) => {
+                                let message = format!(
+                                    "plan_finalized hook '{hook_name}' failed and aborted response completion: {error}"
+                                );
+                                warn!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_name = %hook_name,
+                                    error = %error,
+                                    "plan_finalized hook failed; aborting operation"
+                                );
+                                if abort_message.is_none() {
+                                    abort_message = Some(message);
+                                }
+                                break;
+                            }
+                        }
+                    }
+                }
+                if let Some(message) = abort_message {
+                    sess.send_event(
+                        &turn_context,
+                        EventMsg::Error(ErrorEvent {
+                            message: message.clone(),
+                            codex_error_info: None,
+                        }),
+                    )
+                    .await;
+                    break Err(CodexErr::Fatal(message));
+                }
 
                 break Ok(SamplingRequestResult {
                     needs_follow_up,

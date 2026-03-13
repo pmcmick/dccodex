@@ -29,6 +29,8 @@ pub use types::HookEventAfterToolUse;
 pub use types::HookEventAfterUserPromptSubmit;
 pub use types::HookEventBeforeModelRequest;
 pub use types::HookEventCompaction;
+pub use types::HookEventPlanFinalized;
+pub use types::HookEventPlanImplementationCompleted;
 pub use types::HookEventPostToolUseSuccess;
 pub use types::HookEventPreToolUse;
 pub use types::HookEventSessionShutdown;

@@ -101,6 +101,40 @@ Note: For v1 wire compatibility, `EventMsg::TurnStarted` and `EventMsg::TurnComp
 
 The `response_id` returned from each turn matches the OpenAI `response_id` stored in the API's `/responses` endpoint. It can be stored and used in future `Sessions` to resume threads of work.
 
+## Planning Flow
+
+Plan mode produces a plan artifact, not just streamed assistant text. In the
+current model:
+
+- The planning thread remains the planning record.
+- The finalized plan is represented by the proposed-plan stream and completed
+  plan item.
+- A clean implementation phase can run in a child thread linked back to the
+  planning thread via `parent_thread_id`.
+
+This separation keeps the planning conversation intact while letting execution
+start from a cleaner, authoritative plan scope.
+
+Hook integrations can treat the finalized plan as a scoped artifact with stable
+provenance, including a deterministic `plan_id` (`{thread_id}:{turn_id}`), the
+final plan text, the original user request when available, and the
+`parent_thread_id` when the plan is part of a derived thread hierarchy.
+
+## Project Memory
+
+Codex can also inject a small project-scoped memory artifact during prompt
+assembly. This is distinct from `AGENTS.md`:
+
+- `AGENTS.md` remains the authoritative repo instruction channel.
+- project memory is a short, external, repo-scoped reminder channel for
+  lessons learned or recurring cautions.
+
+When the current working directory belongs to a git repository, Codex looks for
+`CODEX_HOME/memories/projects/<repo-slug>-<hash>/memory.md` and, if present,
+injects it as a dedicated contextual user fragment immediately before the real
+user turn. The directory key is derived from the repository root plus the git
+origin URL when available.
+
 ## Transport
 
 Can operate over any transport that supports bi-directional streaming. - cross-thread channels - IPC channels - stdin/stdout - TCP - HTTP2 - gRPC

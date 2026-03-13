@@ -1096,6 +1096,7 @@ async fn test_updated_at_uses_file_mtime() -> Result<()> {
             meta: SessionMeta {
                 id: conversation_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 timestamp: ts.to_string(),
                 cwd: ".".into(),
                 originator: "test_originator".into(),

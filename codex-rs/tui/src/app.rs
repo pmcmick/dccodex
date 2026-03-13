@@ -14,6 +14,7 @@ use crate::bottom_pane::popup_consts::standard_popup_hint_line;
 use crate::chatwidget::ChatWidget;
 use crate::chatwidget::ExternalEditorState;
 use crate::chatwidget::ThreadInputState;
+use crate::chatwidget::create_initial_user_message;
 use crate::cwd_prompt::CwdPromptAction;
 use crate::diff_render::DiffSummary;
 use crate::exec_command::strip_bash_lc_and_escape;
@@ -766,6 +767,7 @@ impl App {
             app_event_tx: self.app_event_tx.clone(),
             // Fork/resume bootstraps here don't carry any prefilled message content.
             initial_user_message: None,
+            parent_thread_id: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
             models_manager: self.server.get_models_manager(),
@@ -1220,6 +1222,67 @@ impl App {
             self.chat_widget.submit_op(Op::Shutdown);
             self.server.remove_thread(&thread_id).await;
             self.abort_thread_event_listener(thread_id);
+        }
+    }
+
+    async fn fork_current_session_into_child(
+        &mut self,
+        tui: &mut tui::Tui,
+        source: &str,
+    ) -> Result<bool> {
+        let summary = session_summary(
+            self.chat_widget.token_usage(),
+            self.chat_widget.thread_id(),
+            self.chat_widget.thread_name(),
+        );
+        let Some(path) = self.chat_widget.rollout_path() else {
+            self.chat_widget.add_error_message(
+                "A thread must contain at least one turn before it can be forked.".to_string(),
+            );
+            return Ok(false);
+        };
+
+        self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
+            .await;
+
+        // Fresh threads expose a precomputed path, but the file is materialized lazily on first
+        // user message.
+        if !path.exists() {
+            self.chat_widget.add_error_message(
+                "A thread must contain at least one turn before it can be forked.".to_string(),
+            );
+            return Ok(false);
+        }
+
+        match self
+            .server
+            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
+            .await
+        {
+            Ok(forked) => {
+                self.shutdown_current_thread().await;
+                let init =
+                    self.chatwidget_init_for_forked_or_resumed_thread(tui, self.config.clone());
+                self.chat_widget =
+                    ChatWidget::new_from_existing(init, forked.thread, forked.session_configured);
+                self.reset_thread_event_state();
+                if let Some(summary) = summary {
+                    let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+                    if let Some(command) = summary.resume_command {
+                        let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                        lines.push(spans.into());
+                    }
+                    self.chat_widget.add_plain_history_lines(lines);
+                }
+                Ok(true)
+            }
+            Err(err) => {
+                let path_display = path.display();
+                self.chat_widget.add_error_message(format!(
+                    "Failed to fork current session from {path_display} ({source}): {err}"
+                ));
+                Ok(false)
+            }
         }
     }
 
@@ -1814,6 +1877,7 @@ impl App {
             app_event_tx: self.app_event_tx.clone(),
             // New sessions start without prefilled message content.
             initial_user_message: None,
+            parent_thread_id: None,
             enhanced_keys_supported: self.enhanced_keys_supported,
             auth_manager: self.auth_manager.clone(),
             models_manager: self.server.get_models_manager(),
@@ -1827,6 +1891,65 @@ impl App {
         };
         self.chat_widget = ChatWidget::new(init, self.server.clone());
         self.reset_thread_event_state();
+        if let Some(summary) = summary {
+            let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
+            if let Some(command) = summary.resume_command {
+                let spans = vec!["To continue this session, run ".into(), command.cyan()];
+                lines.push(spans.into());
+            }
+            self.chat_widget.add_plain_history_lines(lines);
+        }
+        tui.frame_requester().schedule_frame();
+    }
+
+    async fn start_child_session_with_initial_message(&mut self, tui: &mut tui::Tui, text: String) {
+        self.refresh_in_memory_config_from_disk_best_effort("starting implementation thread")
+            .await;
+        let model = self.chat_widget.current_model().to_string();
+        let config = self.fresh_session_config();
+        let summary = session_summary(
+            self.chat_widget.token_usage(),
+            self.chat_widget.thread_id(),
+            self.chat_widget.thread_name(),
+        );
+        let parent_thread_id = self.chat_widget.thread_id();
+        let parent_thread_name = self.chat_widget.thread_name();
+
+        self.shutdown_current_thread().await;
+
+        let init = crate::chatwidget::ChatWidgetInit {
+            config,
+            frame_requester: tui.frame_requester(),
+            app_event_tx: self.app_event_tx.clone(),
+            initial_user_message: create_initial_user_message(Some(text), Vec::new(), Vec::new()),
+            parent_thread_id,
+            enhanced_keys_supported: self.enhanced_keys_supported,
+            auth_manager: self.auth_manager.clone(),
+            models_manager: self.server.get_models_manager(),
+            feedback: self.feedback.clone(),
+            is_first_run: false,
+            feedback_audience: self.feedback_audience,
+            model: Some(model),
+            startup_tooltip_override: None,
+            status_line_invalid_items_warned: self.status_line_invalid_items_warned.clone(),
+            session_telemetry: self.session_telemetry.clone(),
+        };
+        self.chat_widget = ChatWidget::new(init, self.server.clone());
+        self.reset_thread_event_state();
+
+        if let Some(parent_thread_id) = parent_thread_id {
+            let parent_label = parent_thread_name
+                .filter(|name| !name.trim().is_empty())
+                .unwrap_or_else(|| parent_thread_id.to_string());
+            let line: Line<'static> = vec![
+                "• ".dim(),
+                "Implementation thread started from plan in ".into(),
+                parent_label.cyan(),
+            ]
+            .into();
+            self.chat_widget.add_plain_history_lines(vec![line]);
+        }
+
         if let Some(summary) = summary {
             let mut lines: Vec<Line<'static>> = vec![summary.usage_line.clone().into()];
             if let Some(command) = summary.resume_command {
@@ -2048,6 +2171,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    parent_thread_id: None,
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
@@ -2084,6 +2208,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    parent_thread_id: None,
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
@@ -2122,6 +2247,7 @@ impl App {
                         // CLI prompt args are plain strings, so they don't provide element ranges.
                         Vec::new(),
                     ),
+                    parent_thread_id: None,
                     enhanced_keys_supported,
                     auth_manager: auth_manager.clone(),
                     models_manager: thread_manager.get_models_manager(),
@@ -2510,68 +2636,11 @@ impl App {
                     1,
                     &[("source", "slash_command")],
                 );
-                let summary = session_summary(
-                    self.chat_widget.token_usage(),
-                    self.chat_widget.thread_id(),
-                    self.chat_widget.thread_name(),
-                );
                 self.chat_widget
                     .add_plain_history_lines(vec!["/fork".magenta().into()]);
-                if let Some(path) = self.chat_widget.rollout_path() {
-                    self.refresh_in_memory_config_from_disk_best_effort("forking the thread")
-                        .await;
-                    // Fresh threads expose a precomputed path, but the file is
-                    // materialized lazily on first user message.
-                    if path.exists() {
-                        match self
-                            .server
-                            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false, None)
-                            .await
-                        {
-                            Ok(forked) => {
-                                self.shutdown_current_thread().await;
-                                let init = self.chatwidget_init_for_forked_or_resumed_thread(
-                                    tui,
-                                    self.config.clone(),
-                                );
-                                self.chat_widget = ChatWidget::new_from_existing(
-                                    init,
-                                    forked.thread,
-                                    forked.session_configured,
-                                );
-                                self.reset_thread_event_state();
-                                if let Some(summary) = summary {
-                                    let mut lines: Vec<Line<'static>> =
-                                        vec![summary.usage_line.clone().into()];
-                                    if let Some(command) = summary.resume_command {
-                                        let spans = vec![
-                                            "To continue this session, run ".into(),
-                                            command.cyan(),
-                                        ];
-                                        lines.push(spans.into());
-                                    }
-                                    self.chat_widget.add_plain_history_lines(lines);
-                                }
-                            }
-                            Err(err) => {
-                                let path_display = path.display();
-                                self.chat_widget.add_error_message(format!(
-                                    "Failed to fork current session from {path_display}: {err}"
-                                ));
-                            }
-                        }
-                    } else {
-                        self.chat_widget.add_error_message(
-                            "A thread must contain at least one turn before it can be forked."
-                                .to_string(),
-                        );
-                    }
-                } else {
-                    self.chat_widget.add_error_message(
-                        "A thread must contain at least one turn before it can be forked."
-                            .to_string(),
-                    );
-                }
+                let _ = self
+                    .fork_current_session_into_child(tui, "slash_command")
+                    .await;
 
                 tui.frame_requester().schedule_frame();
             }
@@ -3572,12 +3641,14 @@ impl App {
             AppEvent::OpenReviewCustomPrompt => {
                 self.chat_widget.show_review_custom_prompt();
             }
-            AppEvent::SubmitUserMessageWithMode {
-                text,
-                collaboration_mode,
-            } => {
-                self.chat_widget
-                    .submit_user_message_with_mode(text, collaboration_mode);
+            AppEvent::StartChildSessionWithInitialMessage { text } => {
+                self.session_telemetry.counter(
+                    "codex.thread.new",
+                    1,
+                    &[("source", "plan_handoff")],
+                );
+                self.start_child_session_with_initial_message(tui, text)
+                    .await;
             }
             AppEvent::ManageSkillsClosed => {
                 self.chat_widget.handle_manage_skills_closed();
@@ -3841,6 +3912,7 @@ impl App {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: config_snapshot.model,
                 model_provider_id: config_snapshot.model_provider_id,
@@ -4354,6 +4426,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -4527,6 +4600,7 @@ mod tests {
                     msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                         session_id: thread_id,
                         forked_from_id: None,
+                        parent_thread_id: None,
                         thread_name: None,
                         model: "gpt-test".to_string(),
                         model_provider_id: "test-provider".to_string(),
@@ -4605,6 +4679,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -4687,6 +4762,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -4768,6 +4844,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -4843,6 +4920,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -4957,6 +5035,7 @@ mod tests {
                     msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                         session_id: thread_id,
                         forked_from_id: None,
+                        parent_thread_id: None,
                         thread_name: None,
                         model: "gpt-test".to_string(),
                         model_provider_id: "test-provider".to_string(),
@@ -5027,6 +5106,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -5131,6 +5211,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -5208,6 +5289,7 @@ mod tests {
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -6006,6 +6088,7 @@ guardian_approval = true
                     msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                         session_id: agent_thread_id,
                         forked_from_id: None,
+                        parent_thread_id: None,
                         thread_name: None,
                         model: "gpt-5".to_string(),
                         model_provider_id: "test-provider".to_string(),
@@ -6227,6 +6310,7 @@ guardian_approval = true
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -6878,6 +6962,7 @@ guardian_approval = true
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: ThreadId::new(),
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -6994,6 +7079,7 @@ guardian_approval = true
             let event = SessionConfiguredEvent {
                 session_id: ThreadId::new(),
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -7054,6 +7140,7 @@ guardian_approval = true
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: base_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -7147,6 +7234,7 @@ guardian_approval = true
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -7213,6 +7301,7 @@ guardian_approval = true
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -7294,6 +7383,7 @@ guardian_approval = true
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: None,
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),
@@ -7422,6 +7512,7 @@ guardian_approval = true
         let event = SessionConfiguredEvent {
             session_id: thread_id,
             forked_from_id: None,
+            parent_thread_id: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -7492,6 +7583,7 @@ guardian_approval = true
             msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
                 session_id: thread_id,
                 forked_from_id: None,
+                parent_thread_id: None,
                 thread_name: Some("keep me".to_string()),
                 model: "gpt-test".to_string(),
                 model_provider_id: "test-provider".to_string(),

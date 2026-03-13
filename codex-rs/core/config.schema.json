@@ -2314,6 +2314,22 @@
       ],
       "default": null
     },
+    "notify_on_plan_finalized": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
+    "notify_on_plan_implementation_completed": {
+      "allOf": [
+        {
+          "$ref": "#/definitions/HookCommandsToml"
+        }
+      ],
+      "default": null
+    },
     "notify_on_post_tool_use_success": {
       "allOf": [
         {

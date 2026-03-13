@@ -30,6 +30,7 @@ pub(crate) fn spawn_agent(
     config: Config,
     app_event_tx: AppEventSender,
     server: Arc<ThreadManager>,
+    parent_thread_id: Option<codex_protocol::ThreadId>,
 ) -> UnboundedSender<Op> {
     let (codex_op_tx, mut codex_op_rx) = unbounded_channel::<Op>();
 
@@ -39,7 +40,10 @@ pub(crate) fn spawn_agent(
             thread,
             session_configured,
             ..
-        } = match server.start_thread(config).await {
+        } = match server
+            .start_thread_with_parent(config, Vec::new(), false, None, parent_thread_id)
+            .await
+        {
             Ok(v) => v,
             Err(err) => {
                 let message = format!("Failed to initialize codex: {err}");

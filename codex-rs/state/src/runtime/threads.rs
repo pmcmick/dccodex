@@ -12,6 +12,7 @@ SELECT
     source,
     agent_nickname,
     agent_role,
+    parent_thread_id,
     model_provider,
     cwd,
     cli_version,
@@ -124,6 +125,7 @@ SELECT
     source,
     agent_nickname,
     agent_role,
+    parent_thread_id,
     model_provider,
     cwd,
     cli_version,
@@ -222,6 +224,7 @@ INSERT INTO threads (
     source,
     agent_nickname,
     agent_role,
+    parent_thread_id,
     model_provider,
     cwd,
     cli_version,
@@ -236,7 +239,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO NOTHING
             "#,
         )
@@ -247,6 +250,7 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
+        .bind(metadata.parent_thread_id.as_ref().map(ToString::to_string))
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())
@@ -336,6 +340,7 @@ INSERT INTO threads (
     source,
     agent_nickname,
     agent_role,
+    parent_thread_id,
     model_provider,
     cwd,
     cli_version,
@@ -350,7 +355,7 @@ INSERT INTO threads (
     git_branch,
     git_origin_url,
     memory_mode
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(id) DO UPDATE SET
     rollout_path = excluded.rollout_path,
     created_at = excluded.created_at,
@@ -358,6 +363,7 @@ ON CONFLICT(id) DO UPDATE SET
     source = excluded.source,
     agent_nickname = excluded.agent_nickname,
     agent_role = excluded.agent_role,
+    parent_thread_id = excluded.parent_thread_id,
     model_provider = excluded.model_provider,
     cwd = excluded.cwd,
     cli_version = excluded.cli_version,
@@ -380,6 +386,7 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.source.as_str())
         .bind(metadata.agent_nickname.as_deref())
         .bind(metadata.agent_role.as_deref())
+        .bind(metadata.parent_thread_id.as_ref().map(ToString::to_string))
         .bind(metadata.model_provider.as_str())
         .bind(metadata.cwd.display().to_string())
         .bind(metadata.cli_version.as_str())

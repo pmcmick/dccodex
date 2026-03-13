@@ -27,6 +27,7 @@ use tokio::sync::Mutex;
 use tokio::sync::watch;
 
 use crate::state_db::StateDbHandle;
+use codex_protocol::ThreadId;
 
 #[derive(Clone, Debug)]
 pub struct ThreadConfigSnapshot {
@@ -41,6 +42,7 @@ pub struct ThreadConfigSnapshot {
     pub reasoning_effort: Option<ReasoningEffort>,
     pub personality: Option<Personality>,
     pub session_source: SessionSource,
+    pub parent_thread_id: Option<ThreadId>,
 }
 
 pub struct CodexThread {

@@ -189,6 +189,112 @@ printf '%s\n' '{"switch_to_plan_mode":true}'
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn explicit_planning_language_switches_turn_to_plan_mode() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|cfg| {
+            cfg.model_reasoning_effort = Some(ReasoningEffort::Low);
+            cfg.features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "I'd like to create a plan before we implement this change.".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let warning = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    assert!(matches!(
+        warning,
+        EventMsg::Warning(warning)
+            if warning
+                .message
+                .contains("Automatically switched this turn to Plan mode")
+    ));
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = response_mock.single_request().body_json();
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|value| value.get("effort"))
+            .and_then(|value| value.as_str()),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn complex_request_switches_turn_to_plan_mode() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response_mock = responses::mount_sse_once(
+        &server,
+        sse(vec![ev_response_created("resp-1"), ev_completed("resp-1")]),
+    )
+    .await;
+
+    let TestCodex { codex, .. } = test_codex()
+        .with_config(|cfg| {
+            cfg.model_reasoning_effort = Some(ReasoningEffort::Low);
+            cfg.features
+                .enable(Feature::CollaborationModes)
+                .expect("test config should allow feature update");
+        })
+        .build(&server)
+        .await?;
+
+    codex
+        .submit(Op::UserInput {
+            items: vec![UserInput::Text {
+                text: "We need an end-to-end migration with rollout steps and a multi-file refactor across the request pipeline.".into(),
+                text_elements: Vec::new(),
+            }],
+            final_output_json_schema: None,
+        })
+        .await?;
+
+    let warning = wait_for_event(&codex, |ev| matches!(ev, EventMsg::Warning(_))).await;
+    assert!(matches!(
+        warning,
+        EventMsg::Warning(warning)
+            if warning
+                .message
+                .contains("request looks complex enough to benefit from planning")
+    ));
+    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+
+    let request_body = response_mock.single_request().body_json();
+    assert_eq!(
+        request_body
+            .get("reasoning")
+            .and_then(|value| value.get("effort"))
+            .and_then(|value| value.as_str()),
+        Some("medium")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn session_hooks_emit_json_payloads_on_configure_and_shutdown() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 

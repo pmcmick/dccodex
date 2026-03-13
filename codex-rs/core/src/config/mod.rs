@@ -315,11 +315,19 @@ pub struct Config {
     /// `response.created` event.
     pub notify_on_model_response_created: Option<Vec<Vec<String>>>,
 
+    /// Optional external notifier command invoked when a finalized plan is
+    /// emitted for a turn.
+    pub notify_on_plan_finalized: Option<Vec<Vec<String>>>,
+
     /// Optional external notifier command invoked when a turn starts.
     pub notify_on_turn_started: Option<Vec<Vec<String>>>,
 
     /// Optional external notifier command invoked when a turn completes.
     pub notify_on_turn_completed: Option<Vec<Vec<String>>>,
+
+    /// Optional external notifier command invoked when a clean child thread
+    /// created to implement a finalized plan completes a turn.
+    pub notify_on_plan_implementation_completed: Option<Vec<Vec<String>>>,
 
     /// Optional external notifier command invoked when a turn is aborted.
     pub notify_on_turn_aborted: Option<Vec<Vec<String>>>,
@@ -1281,10 +1289,16 @@ pub struct ConfigToml {
     pub notify_on_model_response_created: Option<HookCommandsToml>,
 
     #[serde(default)]
+    pub notify_on_plan_finalized: Option<HookCommandsToml>,
+
+    #[serde(default)]
     pub notify_on_turn_started: Option<HookCommandsToml>,
 
     #[serde(default)]
     pub notify_on_turn_completed: Option<HookCommandsToml>,
+
+    #[serde(default)]
+    pub notify_on_plan_implementation_completed: Option<HookCommandsToml>,
 
     #[serde(default)]
     pub notify_on_turn_aborted: Option<HookCommandsToml>,
@@ -2753,8 +2767,12 @@ impl Config {
             notify_on_model_response_created: normalize_hook_commands(
                 cfg.notify_on_model_response_created,
             ),
+            notify_on_plan_finalized: normalize_hook_commands(cfg.notify_on_plan_finalized),
             notify_on_turn_started: normalize_hook_commands(cfg.notify_on_turn_started),
             notify_on_turn_completed: normalize_hook_commands(cfg.notify_on_turn_completed),
+            notify_on_plan_implementation_completed: normalize_hook_commands(
+                cfg.notify_on_plan_implementation_completed,
+            ),
             notify_on_turn_aborted: normalize_hook_commands(cfg.notify_on_turn_aborted),
             notify_on_session_start: normalize_hook_commands(cfg.notify_on_session_start),
             notify_on_session_shutdown: normalize_hook_commands(cfg.notify_on_session_shutdown),

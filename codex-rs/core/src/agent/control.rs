@@ -199,6 +199,7 @@ impl AgentControl {
                             false,
                             None,
                             inherited_shell_snapshot,
+                            None,
                         )
                         .await?
                 }
