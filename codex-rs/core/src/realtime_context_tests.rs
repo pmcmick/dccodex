@@ -30,6 +30,7 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
         model: Some("gpt-5".to_string()),
         reasoning_effort: None,
         cwd: PathBuf::from(cwd),
+        parent_thread_id: None,
         cli_version: "test".to_string(),
         title: title.to_string(),
         sandbox_policy: "workspace-write".to_string(),

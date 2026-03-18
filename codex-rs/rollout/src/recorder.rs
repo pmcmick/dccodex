@@ -80,6 +80,7 @@ pub enum RolloutRecorderParams {
     Create {
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
@@ -109,6 +110,7 @@ impl RolloutRecorderParams {
     pub fn new(
         conversation_id: ThreadId,
         forked_from_id: Option<ThreadId>,
+        parent_thread_id: Option<ThreadId>,
         source: SessionSource,
         base_instructions: BaseInstructions,
         dynamic_tools: Vec<DynamicToolSpec>,
@@ -117,6 +119,7 @@ impl RolloutRecorderParams {
         Self::Create {
             conversation_id,
             forked_from_id,
+            parent_thread_id,
             source,
             base_instructions,
             dynamic_tools,
@@ -378,6 +381,7 @@ impl RolloutRecorder {
                 RolloutRecorderParams::Create {
                     conversation_id,
                     forked_from_id,
+                    parent_thread_id,
                     source,
                     base_instructions,
                     dynamic_tools,
@@ -399,6 +403,7 @@ impl RolloutRecorder {
                     let session_meta = SessionMeta {
                         id: session_id,
                         forked_from_id,
+                        parent_thread_id,
                         timestamp,
                         cwd: config.cwd().to_path_buf(),
                         originator: originator().value,
