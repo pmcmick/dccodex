@@ -510,6 +510,8 @@ async fn dispatch_after_tool_use_hook(
         let hook_name = hook_outcome.hook_name;
         match hook_outcome.result {
             HookResult::Success => {}
+            HookResult::SuccessWithPromptAugmentation { .. } => {}
+            HookResult::SuccessWithPreToolUseDecision(_) => {}
             HookResult::FailedContinue(error) => {
                 warn!(
                     call_id = %invocation.call_id,

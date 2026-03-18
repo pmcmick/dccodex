@@ -437,8 +437,8 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             None,
-            parent_trace,
             None,
+            parent_trace,
         ))
         .await
     }
@@ -523,8 +523,8 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             None,
-            parent_trace,
             None,
+            parent_trace,
         ))
         .await
     }
@@ -637,6 +637,7 @@ impl ThreadManagerState {
             None,
             inherited_shell_snapshot,
             None,
+            None,
         ))
         .await
     }
@@ -660,6 +661,7 @@ impl ThreadManagerState {
             persist_extended_history,
             None,
             inherited_shell_snapshot,
+            None,
             None,
         ))
         .await

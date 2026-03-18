@@ -28,6 +28,7 @@ fn thread_metadata(cwd: &str, title: &str, first_user_message: &str) -> ThreadMe
         agent_role: None,
         model_provider: "test-provider".to_string(),
         cwd: PathBuf::from(cwd),
+        parent_thread_id: None,
         cli_version: "test".to_string(),
         title: title.to_string(),
         sandbox_policy: "workspace-write".to_string(),

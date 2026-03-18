@@ -7,6 +7,8 @@ pub(crate) const AGENTS_MD_START_MARKER: &str = "# AGENTS.md instructions for ";
 pub(crate) const AGENTS_MD_END_MARKER: &str = "</INSTRUCTIONS>";
 pub(crate) const SKILL_OPEN_TAG: &str = "<skill>";
 pub(crate) const SKILL_CLOSE_TAG: &str = "</skill>";
+pub(crate) const PROJECT_MEMORY_OPEN_TAG: &str = "<project_memory>";
+pub(crate) const PROJECT_MEMORY_CLOSE_TAG: &str = "</project_memory>";
 pub(crate) const USER_SHELL_COMMAND_OPEN_TAG: &str = "<user_shell_command>";
 pub(crate) const USER_SHELL_COMMAND_CLOSE_TAG: &str = "</user_shell_command>";
 pub(crate) const TURN_ABORTED_OPEN_TAG: &str = "<turn_aborted>";
@@ -72,6 +74,8 @@ pub(crate) const ENVIRONMENT_CONTEXT_FRAGMENT: ContextualUserFragmentDefinition 
     );
 pub(crate) const SKILL_FRAGMENT: ContextualUserFragmentDefinition =
     ContextualUserFragmentDefinition::new(SKILL_OPEN_TAG, SKILL_CLOSE_TAG);
+pub(crate) const PROJECT_MEMORY_FRAGMENT: ContextualUserFragmentDefinition =
+    ContextualUserFragmentDefinition::new(PROJECT_MEMORY_OPEN_TAG, PROJECT_MEMORY_CLOSE_TAG);
 pub(crate) const USER_SHELL_COMMAND_FRAGMENT: ContextualUserFragmentDefinition =
     ContextualUserFragmentDefinition::new(
         USER_SHELL_COMMAND_OPEN_TAG,
@@ -89,6 +93,7 @@ const CONTEXTUAL_USER_FRAGMENTS: &[ContextualUserFragmentDefinition] = &[
     AGENTS_MD_FRAGMENT,
     ENVIRONMENT_CONTEXT_FRAGMENT,
     SKILL_FRAGMENT,
+    PROJECT_MEMORY_FRAGMENT,
     USER_SHELL_COMMAND_FRAGMENT,
     TURN_ABORTED_FRAGMENT,
     SUBAGENT_NOTIFICATION_FRAGMENT,

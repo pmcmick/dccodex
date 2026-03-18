@@ -63,8 +63,6 @@ use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookEventAfterModelResponseCompleted;
-use codex_hooks::HookEventAfterModelResponseCreated;
-use codex_hooks::HookEventBeforeModelRequest;
 use codex_hooks::HookEventPlanFinalized;
 use codex_hooks::HookEventPlanImplementationCompleted;
 use codex_hooks::HookEventSessionShutdown;
@@ -73,6 +71,7 @@ use codex_hooks::HookEventTurnAborted;
 use codex_hooks::HookEventTurnCompleted;
 use codex_hooks::HookEventTurnStarted;
 use codex_hooks::HookPayload;
+use codex_hooks::HookResponse;
 use codex_hooks::HookResult;
 use codex_hooks::Hooks;
 use codex_hooks::HooksConfig;
@@ -2811,6 +2810,77 @@ impl Session {
         self.conversation.clear_active_handoff().await;
     }
 
+    pub(crate) async fn dispatch_non_blocking_hook_event(
+        &self,
+        hook_event_name: &'static str,
+        hook_event: HookEvent,
+        cwd: PathBuf,
+        client: Option<String>,
+        turn_id: Option<&str>,
+    ) {
+        let turn_id = turn_id.unwrap_or("-");
+        let hook_outcomes = self
+            .hooks()
+            .dispatch(HookPayload {
+                session_id: self.conversation_id,
+                cwd,
+                client,
+                triggered_at: chrono::Utc::now(),
+                hook_event,
+            })
+            .await;
+        debug!(
+            turn_id = %turn_id,
+            hook_event = hook_event_name,
+            hooks_executed = hook_outcomes.len(),
+            "hook dispatch completed"
+        );
+        for hook_outcome in hook_outcomes {
+            let hook_name = hook_outcome.hook_name;
+            match hook_outcome.result {
+                HookResult::Success => {
+                    debug!(
+                        turn_id = %turn_id,
+                        hook_event = hook_event_name,
+                        hook_name = %hook_name,
+                        "hook completed"
+                    );
+                }
+                HookResult::SuccessWithPromptAugmentation {
+                    append_prompt_text,
+                    switch_to_plan_mode,
+                } => {
+                    debug!(
+                        turn_id = %turn_id,
+                        hook_event = hook_event_name,
+                        hook_name = %hook_name,
+                        switch_to_plan_mode,
+                        appended_prompt_text_present = append_prompt_text.is_some(),
+                        "hook completed with prompt augmentation"
+                    );
+                }
+                HookResult::SuccessWithPreToolUseDecision(decision) => {
+                    debug!(
+                        turn_id = %turn_id,
+                        hook_event = hook_event_name,
+                        hook_name = %hook_name,
+                        ?decision,
+                        "hook completed with pre-tool decision"
+                    );
+                }
+                HookResult::FailedContinue(error) | HookResult::FailedAbort(error) => {
+                    warn!(
+                        turn_id = %turn_id,
+                        hook_event = hook_event_name,
+                        hook_name = %hook_name,
+                        error = %error,
+                        "hook failed; continuing"
+                    );
+                }
+            }
+        }
+    }
+
     pub(crate) async fn send_event_raw(&self, event: Event) {
         let session_hook_dispatch = match &event.msg {
             EventMsg::SessionConfigured(configured) => {
@@ -4689,6 +4759,10 @@ mod handlers {
     use codex_protocol::request_user_input::RequestUserInputResponse;
 
     use crate::context_manager::is_user_turn_boundary;
+    use codex_hooks::HookEvent;
+    use codex_hooks::HookEventAfterUserPromptSubmit;
+    use codex_hooks::HookPayload;
+    use codex_hooks::HookResult;
     use codex_protocol::config_types::CollaborationMode;
     use codex_protocol::config_types::ModeKind;
     use codex_protocol::config_types::Settings;
@@ -4700,6 +4774,7 @@ mod handlers {
     use serde_json::Value;
     use std::path::PathBuf;
     use std::sync::Arc;
+    use tracing::debug;
     use tracing::info;
     use tracing::warn;
 
@@ -4729,7 +4804,7 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let (items, updates) = match op {
+        let (items, mut updates) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -6306,6 +6381,9 @@ pub(crate) async fn run_turn(
                                     turn_id: turn_context.sub_id.clone(),
                                     input_messages: sampling_request_input_messages,
                                     last_assistant_message: last_agent_message.clone(),
+                                    proposed_plan: last_agent_message
+                                        .as_deref()
+                                        .and_then(extract_proposed_plan_text),
                                 },
                             },
                         })
@@ -6316,6 +6394,28 @@ pub(crate) async fn run_turn(
                         let hook_name = hook_outcome.hook_name;
                         match hook_outcome.result {
                             HookResult::Success => {}
+                            HookResult::SuccessWithPromptAugmentation {
+                                append_prompt_text,
+                                switch_to_plan_mode,
+                            } => {
+                                debug!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_event = "after_agent",
+                                    hook_name = %hook_name,
+                                    switch_to_plan_mode,
+                                    appended_prompt_text_present = append_prompt_text.is_some(),
+                                    "hook completed with prompt augmentation"
+                                );
+                            }
+                            HookResult::SuccessWithPreToolUseDecision(decision) => {
+                                debug!(
+                                    turn_id = %turn_context.sub_id,
+                                    hook_event = "after_agent",
+                                    hook_name = %hook_name,
+                                    ?decision,
+                                    "hook completed with pre-tool decision"
+                                );
+                            }
                             HookResult::FailedContinue(error) => {
                                 warn!(
                                     turn_id = %turn_context.sub_id,
@@ -6666,6 +6766,24 @@ fn build_prompt(
         output_schema: turn_context.final_output_json_schema.clone(),
     }
 }
+
+async fn dispatch_hook_payload(
+    sess: &Session,
+    hook_event_name: &'static str,
+    hook_payload: HookPayload,
+    turn_id: Option<&str>,
+) -> Vec<HookResponse> {
+    let turn_id = turn_id.unwrap_or("-");
+    let hook_outcomes = sess.hooks().dispatch(hook_payload).await;
+    debug!(
+        turn_id = %turn_id,
+        hook_event = hook_event_name,
+        hooks_executed = hook_outcomes.len(),
+        "hook dispatch completed"
+    );
+    hook_outcomes
+}
+
 #[allow(clippy::too_many_arguments)]
 #[instrument(level = "trace",
     skip_all,
@@ -7697,7 +7815,7 @@ async fn try_run_sampling_request(
                 sess.services.models_manager.refresh_if_new_etag(etag).await;
             }
             ResponseEvent::Completed {
-                response_id: _,
+                response_id,
                 token_usage,
             } => {
                 flush_assistant_text_segments_all(
@@ -7711,6 +7829,10 @@ async fn try_run_sampling_request(
                     .await;
                 should_emit_turn_diff = true;
 
+                let proposed_plan = last_agent_message
+                    .as_deref()
+                    .and_then(extract_proposed_plan_text)
+                    .map(|plan| strip_citations(&plan).0);
                 needs_follow_up |= sess.has_pending_input().await;
                 let hook_outcomes = dispatch_hook_payload(
                     sess.as_ref(),
