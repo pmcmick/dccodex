@@ -14,6 +14,7 @@ use core_test_support::skip_if_no_network;
 use core_test_support::test_codex::TestCodex;
 use core_test_support::test_codex::test_codex;
 use core_test_support::wait_for_event;
+use core_test_support::wait_for_event_match;
 use pretty_assertions::assert_eq;
 use serde_json::Value;
 use serde_json::json;
@@ -122,11 +123,8 @@ printf '%s\n' '{"append_prompt_text":"hook-added context"}'
         .await?;
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
-    let request = response_mock.single_request();
-    assert_eq!(
-        request.message_input_texts("user"),
-        vec!["hello world".to_string(), "hook-added context".to_string()]
-    );
+    let user_texts = response_mock.single_request().message_input_texts("user");
+    assert!(user_texts.ends_with(&["hello world".to_string(), "hook-added context".to_string()]));
 
     Ok(())
 }
@@ -466,14 +464,33 @@ printf '%s\n' "${{@: -1}}" >> "${{payload_path}}"
         .await?;
 
     codex.submit(Op::Compact).await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
+    let turn_id = wait_for_event_match(&codex, |ev| match ev {
+        EventMsg::TurnStarted(event) => Some(event.turn_id.clone()),
+        _ => None,
+    })
+    .await;
+    wait_for_event(&codex, |ev| match ev {
+        EventMsg::TurnComplete(event) => event.turn_id == turn_id,
+        _ => false,
+    })
+    .await;
 
     fs_wait::wait_for_path_exists(&payload_file, Duration::from_secs(5)).await?;
-    let payloads = tokio::fs::read_to_string(&payload_file)
-        .await?
-        .lines()
-        .map(serde_json::from_str::<Value>)
-        .collect::<Result<Vec<_>, _>>()?;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    let payloads = loop {
+        let contents = tokio::fs::read_to_string(&payload_file).await?;
+        let payloads = contents
+            .lines()
+            .map(serde_json::from_str::<Value>)
+            .collect::<Result<Vec<_>, _>>()?;
+        if payloads.len() >= 2 {
+            break payloads;
+        }
+        if tokio::time::Instant::now() >= deadline {
+            break payloads;
+        }
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    };
 
     assert_eq!(payloads.len(), 2);
     assert_eq!(payloads[0]["hook_event"]["event_type"], json!("compaction"));

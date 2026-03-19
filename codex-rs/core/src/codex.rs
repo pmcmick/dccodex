@@ -4596,12 +4596,13 @@ mod handlers {
                 _ => None,
             })
             .collect::<Vec<String>>();
-        let (hook_cwd, hook_client) = {
+        let (hook_cwd, hook_client, next_collaboration_mode) = {
             let state = sess.state.lock().await;
             match state.session_configuration.clone().apply(&updates) {
                 Ok(next_configuration) => (
                     next_configuration.cwd,
                     next_configuration.app_server_client_name,
+                    next_configuration.collaboration_mode,
                 ),
                 Err(err) => {
                     sess.send_event_raw(Event {
@@ -4708,8 +4709,7 @@ mod handlers {
         }
         if sess.features.enabled(Feature::CollaborationModes)
             && hook_requests_plan_mode
-            && let Some(current_mode) = updates.collaboration_mode.clone()
-            && current_mode.mode == ModeKind::Default
+            && next_collaboration_mode.mode == ModeKind::Default
             && let Some(plan_mask) = sess
                 .services
                 .models_manager
@@ -4722,7 +4722,7 @@ mod handlers {
                 hook_requests_plan_mode,
                 "switching submitted turn to Plan mode"
             );
-            updates.collaboration_mode = Some(current_mode.apply_mask(&plan_mask));
+            updates.collaboration_mode = Some(next_collaboration_mode.apply_mask(&plan_mask));
         }
 
         let Ok(current_context) = sess.new_turn_with_sub_id(sub_id, updates).await else {
@@ -6183,7 +6183,8 @@ pub(crate) async fn run_turn(
                                     last_assistant_message: last_agent_message.clone(),
                                     proposed_plan: last_agent_message
                                         .as_deref()
-                                        .and_then(extract_proposed_plan_text),
+                                        .and_then(extract_proposed_plan_text)
+                                        .map(|plan| plan.trim_end_matches('\n').to_string()),
                                 },
                             },
                         })
@@ -7654,7 +7655,7 @@ async fn try_run_sampling_request(
                 let proposed_plan = last_agent_message
                     .as_deref()
                     .and_then(extract_proposed_plan_text)
-                    .map(|plan| strip_citations(&plan).0);
+                    .map(|plan| strip_citations(&plan).0.trim_end_matches('\n').to_string());
                 needs_follow_up |= sess.has_pending_input().await;
                 let hook_outcomes = dispatch_hook_payload(
                     sess.as_ref(),
