@@ -1632,7 +1632,13 @@ impl App {
 
         match self
             .server
-            .fork_thread(usize::MAX, self.config.clone(), path.clone(), false)
+            .fork_thread(
+                usize::MAX,
+                self.config.clone(),
+                path.clone(),
+                false,
+                /*parent_trace*/ None,
+            )
             .await
         {
             Ok(forked) => {
