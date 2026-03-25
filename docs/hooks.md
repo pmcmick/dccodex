@@ -14,6 +14,35 @@ Common reasons to use hooks:
 - capture tool failures for debugging
 - track compaction activity in long-running sessions
 
+## Two Hook Systems
+
+DCCodex supports two related but distinct hook systems:
+
+- Claude Code-compatible hooks configured via `hooks.json`
+- DCCodex JSON event hooks configured via `config.toml`
+
+They solve different problems.
+
+Claude Code-compatible hooks:
+
+- events: `SessionStart`, `UserPromptSubmit`, `Stop`
+- payload arrives on stdin
+- command stdout may return structured control data
+- these hooks can stop turn submission, inject additional model context, or continue a stopped turn with a follow-up prompt
+
+DCCodex JSON event hooks:
+
+- keys like `notify_on_before_model_request` and `notify_on_pre_tool_use`
+- payload JSON is appended as the final argv argument
+- most are notifications; a small subset can actively change runtime behavior
+- these hooks are the main extension surface for DCCodex-specific lifecycle events such as compaction, plan finalization, model request boundaries, and tool execution tracing
+
+If you are trying to reproduce Claude Code policy hooks, focus first on:
+
+- `hooks.json` `UserPromptSubmit` / `Stop`
+- `notify_on_pre_tool_use`
+- `notify_on_before_model_request`
+
 ## Where to configure hooks
 
 Codex reads hooks from `config.toml`.
@@ -44,6 +73,12 @@ notify_on_turn_completed = [
 ```
 
 Hooks for the same event run in configured order.
+
+For DCCodex JSON event hooks, "configured order" means:
+
+- the runtime invokes hooks in declaration order
+- control hooks observe earlier decisions before later hooks run
+- fire-and-forget notifier hooks are launched in that order, but they may finish in a different order because they run as child processes
 
 ## What every hook receives
 
@@ -120,6 +155,12 @@ Useful fields:
 - `sampling_request_index`
 - `input_messages`
 
+`sampling_request_index` counts the 1-based request number within the current turn. A turn with a tool call usually has multiple model requests:
+
+1. initial request
+2. request after the first tool output is recorded
+3. and so on
+
 ### `notify_on_model_response_created`
 
 Runs when a response object is created.
@@ -128,6 +169,11 @@ Use this when:
 
 - you want request/response lifecycle tracing
 - you want to correlate later events by response creation timing
+
+Useful fields:
+
+- `model`
+- `sampling_request_index`
 
 ### `notify_on_model_response_completed`
 
@@ -219,6 +265,17 @@ Use this when:
 - you want a broad tool audit trail
 - you want timing and output previews
 
+This hook runs for:
+
+- real tool execution
+- `notify_on_pre_tool_use` deny decisions
+- `notify_on_pre_tool_use` replacement decisions
+
+Use the payload to distinguish those cases:
+
+- `executed = true` means the real tool handler ran
+- `executed = false` means a pre-tool hook short-circuited execution
+
 ### `notify_on_pre_tool_use`
 
 Runs before a tool executes.
@@ -228,6 +285,8 @@ Use this when:
 - you want to block tools in certain repos
 - you want to stub or replace tool output
 - you want extra policy checks before command execution
+
+This is the DCCodex JSON-hook control point that most closely matches Claude Code-style tool policy hooks.
 
 Special stdout behavior:
 
@@ -259,6 +318,8 @@ Use this when:
 - you want alerts for broken commands
 - you want to capture failure previews for later debugging
 
+This hook only runs for real tool-handler failures. It does not run when `notify_on_pre_tool_use` denies or replaces a tool call.
+
 ### `notify_on_post_tool_use_success`
 
 Runs only after successful tool execution.
@@ -268,15 +329,26 @@ Use this when:
 - you want success-only automation
 - you do not want to mix failure events into downstream logs
 
+This hook only runs after a real tool handler succeeds. It does not run for pre-tool replacements, even if the replacement marks itself as successful.
+
 ## Hook behavior and ordering
 
 Rules:
 
 - hooks for one event run in configured order
-- most hooks are fire-and-forget notifications
+- most JSON event hooks are fire-and-forget notifications
+- Claude-compatible `SessionStart`, `UserPromptSubmit`, and `Stop` hooks are synchronous and structured
 - `notify_on_user_prompt_submit` and `notify_on_pre_tool_use` can actively change behavior
 - a hook failure may either continue or abort, depending on the hook result used internally
 - if a hook returns `FailedAbort`, later hooks for that same event do not run
+
+Important practical details:
+
+- `notify_on_before_model_request` fires immediately before the request is sent to the provider
+- `notify_on_model_response_created` fires when the provider acknowledges response creation
+- `notify_on_model_response_completed` fires after the full streamed response is complete
+- `notify_on_after_tool_use` is the broad audit hook
+- `notify_on_tool_failure` and `notify_on_post_tool_use_success` split the real tool path into failure-only vs success-only follow-ups
 
 ## Example scripts
 

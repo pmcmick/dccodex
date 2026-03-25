@@ -41,6 +41,12 @@ Codex supports two hook families:
 - legacy `notify`
 - event-specific `notify_on_*` hooks
 
+DCCodex also keeps the Claude Code-compatible `hooks.json` engine for:
+
+- `SessionStart`
+- `UserPromptSubmit`
+- `Stop`
+
 `notify` runs when an agent turn finishes. `notify_on_*` hooks run for specific lifecycle events and are the preferred extension point when you need structured automation.
 
 For a practical setup guide with examples and event-by-event recommendations, see [hooks.md](./hooks.md).
@@ -173,6 +179,26 @@ Hooks run in configured order.
 - normal success allows later hooks to continue
 - hook failures may either continue or abort, depending on the hook result produced by the runtime
 - `pre_tool_use` can stop the real tool execution without treating that as a tool failure
+- `tool_failure` only runs for real tool-handler failures
+- `post_tool_use_success` only runs after real tool-handler success
+
+### DCCodex-specific hook architecture
+
+If you are extending DCCodex rather than upstream Codex, it helps to think in three layers:
+
+1. `notify`
+   legacy end-of-turn compatibility hook
+2. Claude-compatible `hooks.json`
+   synchronous policy hooks for `SessionStart`, `UserPromptSubmit`, and `Stop`
+3. DCCodex `notify_on_*`
+   JSON lifecycle hooks covering model request boundaries, plan events, compaction, and tool execution
+
+The DCCodex JSON hooks are the non-standard feature set in this repo. Their canonical runtime definitions live in:
+
+- `codex-rs/hooks/src/types.rs`
+- `codex-rs/hooks/src/registry.rs`
+- `codex-rs/core/src/codex.rs`
+- `codex-rs/core/src/tools/registry.rs`
 
 If a hook exits non-zero or emits invalid JSON for a structured response hook, Codex logs the failure and applies the hook-specific failure handling for that event.
 
