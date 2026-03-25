@@ -9694,6 +9694,7 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            parent_thread_id: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -9743,6 +9744,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            parent_thread_id: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
