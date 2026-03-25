@@ -63,6 +63,8 @@ use codex_app_server_protocol::McpServerElicitationRequestParams;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterAgent;
 use codex_hooks::HookEventAfterModelResponseCompleted;
+use codex_hooks::HookEventAfterModelResponseCreated;
+use codex_hooks::HookEventBeforeModelRequest;
 use codex_hooks::HookEventPlanFinalized;
 use codex_hooks::HookEventPlanImplementationCompleted;
 use codex_hooks::HookEventSessionShutdown;
@@ -6161,6 +6163,7 @@ pub(crate) async fn run_turn(
     // one instance across retries within this turn.
     let mut client_session =
         prewarmed_client_session.unwrap_or_else(|| sess.services.model_client.new_session());
+    let mut sampling_request_index = 0u32;
 
     loop {
         if let Some(session_start_source) = sess.take_pending_session_start_source().await {
@@ -6258,11 +6261,13 @@ pub(crate) async fn run_turn(
             .map(|user_message| user_message.message())
             .collect::<Vec<String>>();
         let turn_metadata_header = turn_context.turn_metadata_state.current_header_value();
+        sampling_request_index = sampling_request_index.saturating_add(1);
         match run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             Arc::clone(&turn_diff_tracker),
             &mut client_session,
+            sampling_request_index,
             turn_metadata_header.as_deref(),
             sampling_request_input,
             &turn_enabled_connectors,
@@ -6798,6 +6803,7 @@ async fn run_sampling_request(
     turn_context: Arc<TurnContext>,
     turn_diff_tracker: SharedTurnDiffTracker,
     client_session: &mut ModelClientSession,
+    sampling_request_index: u32,
     turn_metadata_header: Option<&str>,
     input: Vec<ResponseItem>,
     explicitly_enabled_connectors: &HashSet<String>,
@@ -6846,6 +6852,7 @@ async fn run_sampling_request(
             Arc::clone(&sess),
             Arc::clone(&turn_context),
             client_session,
+            sampling_request_index,
             turn_metadata_header,
             Arc::clone(&turn_diff_tracker),
             server_model_warning_emitted_for_turn,
@@ -7615,6 +7622,7 @@ async fn try_run_sampling_request(
     sess: Arc<Session>,
     turn_context: Arc<TurnContext>,
     client_session: &mut ModelClientSession,
+    sampling_request_index: u32,
     turn_metadata_header: Option<&str>,
     turn_diff_tracker: SharedTurnDiffTracker,
     server_model_warning_emitted_for_turn: &mut bool,
@@ -7629,6 +7637,92 @@ async fn try_run_sampling_request(
         auth_mode = sess.services.auth_manager.auth_mode(),
         features = sess.features.enabled_features(),
     );
+    // This hook fires once for each outbound model request in the current turn,
+    // including follow-up requests after tool outputs are recorded. Keeping the
+    // emission immediately ahead of `client_session.stream(...)` makes the
+    // payload reflect the exact prompt/tool set that will be sent on the wire.
+    let hook_outcomes = dispatch_hook_payload(
+        sess.as_ref(),
+        "before_model_request",
+        HookPayload {
+            session_id: sess.conversation_id,
+            cwd: turn_context.cwd.clone(),
+            client: turn_context.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::BeforeModelRequest {
+                event: HookEventBeforeModelRequest {
+                    thread_id: sess.conversation_id,
+                    turn_id: turn_context.sub_id.clone(),
+                    model: turn_context.model_info.slug.clone(),
+                    sampling_request_index,
+                    input_messages: prompt
+                        .input
+                        .iter()
+                        .filter_map(|item| match parse_turn_item(item) {
+                            Some(TurnItem::UserMessage(user_message)) => Some(user_message),
+                            _ => None,
+                        })
+                        .map(|user_message| user_message.message())
+                        .collect(),
+                },
+            },
+        },
+        Some(turn_context.sub_id.as_str()),
+    )
+    .await;
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {
+                debug!(
+                    turn_id = %turn_context.sub_id,
+                    hook_event = "before_model_request",
+                    hook_name = %hook_name,
+                    sampling_request_index,
+                    "hook completed"
+                );
+            }
+            HookResult::SuccessWithPromptAugmentation {
+                append_prompt_text,
+                switch_to_plan_mode,
+            } => {
+                debug!(
+                    turn_id = %turn_context.sub_id,
+                    hook_event = "before_model_request",
+                    hook_name = %hook_name,
+                    sampling_request_index,
+                    switch_to_plan_mode,
+                    appended_prompt_text_present = append_prompt_text.is_some(),
+                    "hook completed with prompt augmentation"
+                );
+            }
+            HookResult::SuccessWithPreToolUseDecision(decision) => {
+                debug!(
+                    turn_id = %turn_context.sub_id,
+                    hook_event = "before_model_request",
+                    hook_name = %hook_name,
+                    sampling_request_index,
+                    ?decision,
+                    "hook completed with pre-tool decision"
+                );
+            }
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    turn_id = %turn_context.sub_id,
+                    hook_name = %hook_name,
+                    sampling_request_index,
+                    error = %error,
+                    "before_model_request hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                return Err(CodexErr::Fatal(format!(
+                    "before_model_request hook '{hook_name}' failed and aborted model request: {error}"
+                )));
+            }
+        }
+    }
+
     let mut stream = client_session
         .stream(
             prompt,
@@ -7687,7 +7781,80 @@ async fn try_run_sampling_request(
         record_turn_ttft_metric(&turn_context, &event).await;
 
         match event {
-            ResponseEvent::Created => {}
+            ResponseEvent::Created => {
+                let hook_outcomes = dispatch_hook_payload(
+                    sess.as_ref(),
+                    "after_model_response_created",
+                    HookPayload {
+                        session_id: sess.conversation_id,
+                        cwd: turn_context.cwd.clone(),
+                        client: turn_context.app_server_client_name.clone(),
+                        triggered_at: chrono::Utc::now(),
+                        hook_event: HookEvent::AfterModelResponseCreated {
+                            event: HookEventAfterModelResponseCreated {
+                                thread_id: sess.conversation_id,
+                                turn_id: turn_context.sub_id.clone(),
+                                model: turn_context.model_info.slug.clone(),
+                                sampling_request_index,
+                            },
+                        },
+                    },
+                    Some(turn_context.sub_id.as_str()),
+                )
+                .await;
+                for hook_outcome in hook_outcomes {
+                    let hook_name = hook_outcome.hook_name;
+                    match hook_outcome.result {
+                        HookResult::Success => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_created",
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                "hook completed"
+                            );
+                        }
+                        HookResult::SuccessWithPromptAugmentation {
+                            append_prompt_text,
+                            switch_to_plan_mode,
+                        } => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_created",
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                switch_to_plan_mode,
+                                appended_prompt_text_present = append_prompt_text.is_some(),
+                                "hook completed with prompt augmentation"
+                            );
+                        }
+                        HookResult::SuccessWithPreToolUseDecision(decision) => {
+                            debug!(
+                                turn_id = %turn_context.sub_id,
+                                hook_event = "after_model_response_created",
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                ?decision,
+                                "hook completed with pre-tool decision"
+                            );
+                        }
+                        HookResult::FailedContinue(error) => {
+                            warn!(
+                                turn_id = %turn_context.sub_id,
+                                hook_name = %hook_name,
+                                sampling_request_index,
+                                error = %error,
+                                "after_model_response_created hook failed; continuing"
+                            );
+                        }
+                        HookResult::FailedAbort(error) => {
+                            return Err(CodexErr::Fatal(format!(
+                                "after_model_response_created hook '{hook_name}' failed and aborted response streaming: {error}"
+                            )));
+                        }
+                    }
+                }
+            }
             ResponseEvent::OutputItemDone(item) => {
                 let previously_active_item = active_item.take();
                 if let Some(previous) = previously_active_item.as_ref()

@@ -8,17 +8,23 @@ use crate::function_tool::FunctionCallError;
 use crate::memories::usage::emit_metric_for_tool_read;
 use crate::protocol::SandboxPolicy;
 use crate::sandbox_tags::sandbox_tag;
+use crate::tools::context::FunctionToolOutput;
 use crate::tools::context::ToolInvocation;
 use crate::tools::context::ToolOutput;
 use crate::tools::context::ToolPayload;
 use async_trait::async_trait;
 use codex_hooks::HookEvent;
 use codex_hooks::HookEventAfterToolUse;
+use codex_hooks::HookEventPostToolUseSuccess;
+use codex_hooks::HookEventPreToolUse;
+use codex_hooks::HookEventToolFailure;
 use codex_hooks::HookPayload;
+use codex_hooks::HookPreToolUseDecision;
 use codex_hooks::HookResult;
 use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
+use codex_protocol::mcp::CallToolResult;
 use codex_protocol::models::ResponseInputItem;
 use codex_utils_readiness::Readiness;
 use tracing::warn;
@@ -133,6 +139,12 @@ pub struct ToolRegistry {
     handlers: HashMap<String, Arc<dyn AnyToolHandler>>,
 }
 
+struct ToolHookContext<'a> {
+    invocation: &'a ToolInvocation,
+    tool_input: &'a HookToolInput,
+    mutating: bool,
+}
+
 impl ToolRegistry {
     fn new(handlers: HashMap<String, Arc<dyn AnyToolHandler>>) -> Self {
         Self { handlers }
@@ -244,6 +256,15 @@ impl ToolRegistry {
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
+        let tool_input = HookToolInput::from(&invocation.payload);
+        let hook_context = ToolHookContext {
+            invocation: &invocation,
+            tool_input: &tool_input,
+            mutating: is_mutating,
+        };
+        if let Some(outcome) = dispatch_pre_tool_use_hook(&hook_context).await? {
+            return Ok(outcome);
+        }
         let response_cell = tokio::sync::Mutex::new(None);
         let invocation_for_tool = invocation.clone();
 
@@ -285,7 +306,8 @@ impl ToolRegistry {
             Err(err) => (err.to_string(), false),
         };
         emit_metric_for_tool_read(&invocation, success).await;
-        let hook_abort_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
+        let success_output_preview = output_preview.clone();
+        let after_tool_use_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
             output_preview,
             success,
@@ -295,19 +317,35 @@ impl ToolRegistry {
         })
         .await;
 
-        if let Some(err) = hook_abort_error {
+        if let Some(err) = after_tool_use_error {
             return Err(err);
         }
 
         match result {
             Ok(_) => {
+                let post_tool_use_success_error = dispatch_post_tool_use_success_hook(
+                    &hook_context,
+                    success_output_preview,
+                    duration,
+                )
+                .await;
+                if let Some(err) = post_tool_use_success_error {
+                    return Err(err);
+                }
                 let mut guard = response_cell.lock().await;
                 let result = guard.take().ok_or_else(|| {
                     FunctionCallError::Fatal("tool produced no output".to_string())
                 })?;
                 Ok(result)
             }
-            Err(err) => Err(err),
+            Err(err) => {
+                if let Some(hook_err) =
+                    dispatch_tool_failure_hook(&hook_context, &err, duration).await
+                {
+                    return Err(hook_err);
+                }
+                Err(err)
+            }
         }
     }
 }
@@ -531,6 +569,253 @@ async fn dispatch_after_tool_use_hook(
                 );
                 return Some(FunctionCallError::Fatal(format!(
                     "after_tool_use hook '{hook_name}' failed and aborted operation: {error}"
+                )));
+            }
+        }
+    }
+
+    None
+}
+
+/// `pre_tool_use` is the active policy hook in the JSON hook family.
+/// It runs after the tool has been resolved but before the handler is called,
+/// so hooks can deny or replace a tool invocation without racing the actual
+/// side effect.
+async fn dispatch_pre_tool_use_hook(
+    context: &ToolHookContext<'_>,
+) -> Result<Option<AnyToolResult>, FunctionCallError> {
+    let ToolHookContext {
+        invocation,
+        tool_input,
+        mutating,
+    } = context;
+    let session = invocation.session.as_ref();
+    let turn = invocation.turn.as_ref();
+    let hook_outcomes = session
+        .hooks()
+        .dispatch(HookPayload {
+            session_id: session.conversation_id,
+            cwd: turn.cwd.clone(),
+            client: turn.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::PreToolUse {
+                event: HookEventPreToolUse {
+                    turn_id: turn.sub_id.clone(),
+                    call_id: invocation.call_id.clone(),
+                    tool_name: invocation.tool_name.clone(),
+                    tool_kind: hook_tool_kind(tool_input),
+                    tool_input: (*tool_input).clone(),
+                    mutating: *mutating,
+                    sandbox: sandbox_tag(&turn.sandbox_policy, turn.windows_sandbox_level)
+                        .to_string(),
+                    sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
+                },
+            },
+        })
+        .await;
+
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {}
+            HookResult::SuccessWithPromptAugmentation { .. } => {}
+            HookResult::SuccessWithPreToolUseDecision(decision) => {
+                let synthetic = match decision {
+                    HookPreToolUseDecision::Deny { message } => {
+                        synthetic_tool_result(invocation, message, /*success*/ false)
+                    }
+                    HookPreToolUseDecision::Replace { output, success } => {
+                        synthetic_tool_result(invocation, output, success)
+                    }
+                }?;
+                let preview = synthetic.result.log_preview();
+                let success = synthetic.result.success_for_logging();
+                if let Some(err) = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
+                    invocation,
+                    output_preview: preview,
+                    success,
+                    executed: false,
+                    duration: Duration::ZERO,
+                    mutating: *mutating,
+                })
+                .await
+                {
+                    return Err(err);
+                }
+                return Ok(Some(synthetic));
+            }
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "pre_tool_use hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                return Err(FunctionCallError::Fatal(format!(
+                    "pre_tool_use hook '{hook_name}' failed and aborted tool dispatch: {error}"
+                )));
+            }
+        }
+    }
+
+    Ok(None)
+}
+
+fn synthetic_tool_result(
+    invocation: &ToolInvocation,
+    output: String,
+    success: bool,
+) -> Result<AnyToolResult, FunctionCallError> {
+    let result: Box<dyn ToolOutput> = match &invocation.payload {
+        ToolPayload::Function { .. }
+        | ToolPayload::Custom { .. }
+        | ToolPayload::LocalShell { .. } => {
+            Box::new(FunctionToolOutput::from_text(output, Some(success)))
+        }
+        ToolPayload::Mcp { .. } => Box::new(CallToolResult {
+            content: vec![serde_json::json!({
+                "type": "text",
+                "text": output,
+            })],
+            structured_content: None,
+            is_error: Some(!success),
+            meta: None,
+        }),
+        ToolPayload::ToolSearch { .. } => {
+            return Err(FunctionCallError::Fatal(
+                "pre_tool_use replacement is not supported for tool_search".to_string(),
+            ));
+        }
+    };
+
+    Ok(AnyToolResult {
+        call_id: invocation.call_id.clone(),
+        payload: invocation.payload.clone(),
+        result,
+    })
+}
+
+async fn dispatch_tool_failure_hook(
+    context: &ToolHookContext<'_>,
+    error: &FunctionCallError,
+    duration: Duration,
+) -> Option<FunctionCallError> {
+    let ToolHookContext {
+        invocation,
+        tool_input,
+        mutating,
+    } = context;
+    let session = invocation.session.as_ref();
+    let turn = invocation.turn.as_ref();
+    let hook_outcomes = session
+        .hooks()
+        .dispatch(HookPayload {
+            session_id: session.conversation_id,
+            cwd: turn.cwd.clone(),
+            client: turn.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::ToolFailure {
+                event: HookEventToolFailure {
+                    turn_id: turn.sub_id.clone(),
+                    call_id: invocation.call_id.clone(),
+                    tool_name: invocation.tool_name.clone(),
+                    tool_kind: hook_tool_kind(tool_input),
+                    tool_input: (*tool_input).clone(),
+                    duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+                    mutating: *mutating,
+                    sandbox: sandbox_tag(&turn.sandbox_policy, turn.windows_sandbox_level)
+                        .to_string(),
+                    sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
+                    error_preview: error.to_string(),
+                },
+            },
+        })
+        .await;
+
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {}
+            HookResult::SuccessWithPromptAugmentation { .. } => {}
+            HookResult::SuccessWithPreToolUseDecision(_) => {}
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "tool_failure hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                return Some(FunctionCallError::Fatal(format!(
+                    "tool_failure hook '{hook_name}' failed and aborted operation: {error}"
+                )));
+            }
+        }
+    }
+
+    None
+}
+
+async fn dispatch_post_tool_use_success_hook(
+    context: &ToolHookContext<'_>,
+    output_preview: String,
+    duration: Duration,
+) -> Option<FunctionCallError> {
+    let ToolHookContext {
+        invocation,
+        tool_input,
+        mutating,
+    } = context;
+    let session = invocation.session.as_ref();
+    let turn = invocation.turn.as_ref();
+    let hook_outcomes = session
+        .hooks()
+        .dispatch(HookPayload {
+            session_id: session.conversation_id,
+            cwd: turn.cwd.clone(),
+            client: turn.app_server_client_name.clone(),
+            triggered_at: chrono::Utc::now(),
+            hook_event: HookEvent::PostToolUseSuccess {
+                event: HookEventPostToolUseSuccess {
+                    turn_id: turn.sub_id.clone(),
+                    call_id: invocation.call_id.clone(),
+                    tool_name: invocation.tool_name.clone(),
+                    tool_kind: hook_tool_kind(tool_input),
+                    tool_input: (*tool_input).clone(),
+                    duration_ms: u64::try_from(duration.as_millis()).unwrap_or(u64::MAX),
+                    mutating: *mutating,
+                    sandbox: sandbox_tag(&turn.sandbox_policy, turn.windows_sandbox_level)
+                        .to_string(),
+                    sandbox_policy: sandbox_policy_tag(&turn.sandbox_policy).to_string(),
+                    output_preview,
+                },
+            },
+        })
+        .await;
+
+    for hook_outcome in hook_outcomes {
+        let hook_name = hook_outcome.hook_name;
+        match hook_outcome.result {
+            HookResult::Success => {}
+            HookResult::SuccessWithPromptAugmentation { .. } => {}
+            HookResult::SuccessWithPreToolUseDecision(_) => {}
+            HookResult::FailedContinue(error) => {
+                warn!(
+                    call_id = %invocation.call_id,
+                    tool_name = %invocation.tool_name,
+                    hook_name = %hook_name,
+                    error = %error,
+                    "post_tool_use_success hook failed; continuing"
+                );
+            }
+            HookResult::FailedAbort(error) => {
+                return Some(FunctionCallError::Fatal(format!(
+                    "post_tool_use_success hook '{hook_name}' failed and aborted operation: {error}"
                 )));
             }
         }
