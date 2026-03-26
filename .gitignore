@@ -13,6 +13,11 @@ bazel-*
 build/
 out/
 storybook-static/
+/codex-rs/target-musl-container/
+/codex-rs/dist/release/
+/codex-rs/dist/release-1160/
+/codex-rs/.cargo-home-musl/
+/.cargo-home-musl/
 
 # ignore README for publishing
 codex-cli/README.md
@@ -90,4 +95,3 @@ CHANGELOG.ignore.md
 # Python bytecode files
 __pycache__/
 *.pyc
-
