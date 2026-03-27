@@ -2,6 +2,7 @@ use std::process::Stdio;
 use std::sync::Arc;
 
 use serde::Deserialize;
+use tokio::task;
 
 use crate::Hook;
 use crate::HookPayload;
@@ -11,29 +12,51 @@ use crate::command_from_argv;
 
 pub fn json_payload_hook(name: String, argv: Vec<String>) -> Hook {
     let argv = Arc::new(argv);
+    let hook_name = name.clone();
     Hook {
         name,
         func: Arc::new(move |payload: &HookPayload| {
             let argv = Arc::clone(&argv);
+            let hook_name = hook_name.clone();
             Box::pin(async move {
-                let mut command = match command_from_argv(&argv) {
-                    Some(command) => command,
-                    None => return HookResult::Success,
-                };
-                match serde_json::to_string(payload) {
-                    Ok(json_payload) => {
-                        command.arg(json_payload);
-                    }
+                let json_payload = match serde_json::to_string(payload) {
+                    Ok(json_payload) => json_payload,
                     Err(err) => return HookResult::FailedContinue(err.into()),
+                };
+                let Some((program, args)) = argv.split_first() else {
+                    return HookResult::Success;
+                };
+                if program.is_empty() {
+                    return HookResult::Success;
                 }
+                let program = program.clone();
+                let args = args.to_vec();
 
-                command
-                    .stdin(Stdio::null())
-                    .stdout(Stdio::null())
-                    .stderr(Stdio::null());
-
-                match command.spawn() {
-                    Ok(_) => HookResult::Success,
+                match task::spawn_blocking(move || {
+                    let mut command = std::process::Command::new(program);
+                    command.args(args);
+                    command.arg(json_payload);
+                    command
+                        .stdin(Stdio::null())
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null());
+                    command.status()
+                })
+                .await
+                {
+                    Ok(Ok(status)) => {
+                        if status.success() {
+                            HookResult::Success
+                        } else {
+                            HookResult::FailedContinue(
+                                std::io::Error::other(format!(
+                                    "{hook_name} hook exited with status {status}"
+                                ))
+                                .into(),
+                            )
+                        }
+                    }
+                    Ok(Err(err)) => HookResult::FailedContinue(err.into()),
                     Err(err) => HookResult::FailedContinue(err.into()),
                 }
             })

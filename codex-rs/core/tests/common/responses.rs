@@ -63,6 +63,21 @@ impl ResponseMock {
         self.requests.lock().unwrap().last().cloned()
     }
 
+    pub async fn wait_for_request_count(&self, expected: usize, timeout: Duration) {
+        let started = tokio::time::Instant::now();
+        loop {
+            if self.requests.lock().unwrap().len() >= expected {
+                return;
+            }
+            assert!(
+                started.elapsed() < timeout,
+                "timed out waiting for {expected} requests; saw {}",
+                self.requests.lock().unwrap().len()
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    }
+
     /// Returns true if any captured request contains a `function_call` with the
     /// provided `call_id`.
     pub fn saw_function_call(&self, call_id: &str) -> bool {
@@ -1029,11 +1044,37 @@ pub async fn mount_compact_user_history_with_summary_once(
     mount_compact_user_history_with_summary_sequence(server, vec![summary_text.to_string()]).await
 }
 
+pub async fn mount_compact_user_history_with_summary_once_unchecked(
+    server: &MockServer,
+    summary_text: &str,
+) -> ResponseMock {
+    mount_compact_user_history_with_summary_sequence_unchecked(
+        server,
+        vec![summary_text.to_string()],
+    )
+    .await
+}
+
 /// Same as [`mount_compact_user_history_with_summary_once`], but for multiple compact calls.
 /// Each incoming compact request receives the next summary text in order.
 pub async fn mount_compact_user_history_with_summary_sequence(
     server: &MockServer,
     summary_texts: Vec<String>,
+) -> ResponseMock {
+    mount_compact_user_history_with_summary_sequence_inner(server, summary_texts, true).await
+}
+
+pub async fn mount_compact_user_history_with_summary_sequence_unchecked(
+    server: &MockServer,
+    summary_texts: Vec<String>,
+) -> ResponseMock {
+    mount_compact_user_history_with_summary_sequence_inner(server, summary_texts, false).await
+}
+
+async fn mount_compact_user_history_with_summary_sequence_inner(
+    server: &MockServer,
+    summary_texts: Vec<String>,
+    expect_exact_calls: bool,
 ) -> ResponseMock {
     use std::sync::atomic::AtomicUsize;
     use std::sync::atomic::Ordering;
@@ -1095,11 +1136,12 @@ pub async fn mount_compact_user_history_with_summary_sequence(
         summary_texts,
     };
     let (mock, response_mock) = compact_mock();
-    mock.respond_with(responder)
-        .up_to_n_times(num_calls as u64)
-        .expect(num_calls as u64)
-        .mount(server)
-        .await;
+    let mock = mock.respond_with(responder).up_to_n_times(num_calls as u64);
+    if expect_exact_calls {
+        mock.expect(num_calls as u64).mount(server).await;
+    } else {
+        mock.mount(server).await;
+    }
     response_mock
 }
 

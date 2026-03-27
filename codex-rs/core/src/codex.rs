@@ -4919,7 +4919,7 @@ mod handlers {
     }
 
     pub async fn user_input_or_turn(sess: &Arc<Session>, sub_id: String, op: Op) {
-        let (items, mut updates) = match op {
+        let (mut items, mut updates) = match op {
             Op::UserTurn {
                 cwd,
                 approval_policy,
@@ -5103,9 +5103,27 @@ mod handlers {
                 }
             }
         }
+        if !appended_prompt_texts.is_empty() {
+            items.extend(
+                appended_prompt_texts
+                    .into_iter()
+                    .map(|text| UserInput::Text {
+                        text,
+                        text_elements: Vec::new(),
+                    }),
+            );
+        }
         if sess.features.enabled(Feature::CollaborationModes)
             && (hook_requests_plan_mode || auto_plan_mode_trigger.is_some())
-            && let Some(current_mode) = updates.collaboration_mode.clone()
+            && let Some(current_mode) = {
+                let state = sess.state.lock().await;
+                state
+                    .session_configuration
+                    .clone()
+                    .apply(&updates)
+                    .ok()
+                    .map(|configuration| configuration.collaboration_mode)
+            }
             && current_mode.mode == ModeKind::Default
             && let Some(plan_mask) = sess
                 .services
