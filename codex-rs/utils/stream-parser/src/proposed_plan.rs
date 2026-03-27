@@ -111,7 +111,7 @@ pub fn extract_proposed_plan_text(text: &str) -> Option<String> {
             ProposedPlanSegment::ProposedPlanEnd | ProposedPlanSegment::Normal(_) => {}
         }
     }
-    saw_plan_block.then_some(plan_text)
+    saw_plan_block.then(|| plan_text.trim_end().to_string())
 }
 
 #[cfg(test)]

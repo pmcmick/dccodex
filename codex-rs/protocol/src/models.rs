@@ -6,6 +6,7 @@ use codex_utils_image::load_for_prompt_bytes;
 use serde::Deserialize;
 use serde::Deserializer;
 use serde::Serialize;
+use serde::ser::SerializeMap;
 use serde::ser::Serializer;
 use ts_rs::TS;
 
@@ -1372,6 +1373,13 @@ impl Serialize for FunctionCallOutputPayload {
     where
         S: Serializer,
     {
+        if let Some(success) = self.success {
+            let mut map = serializer.serialize_map(Some(2))?;
+            map.serialize_entry("content", &self.body)?;
+            map.serialize_entry("success", &success)?;
+            return map.end();
+        }
+
         match &self.body {
             FunctionCallOutputBody::Text(content) => serializer.serialize_str(content),
             FunctionCallOutputBody::ContentItems(items) => items.serialize(serializer),
@@ -1384,11 +1392,26 @@ impl<'de> Deserialize<'de> for FunctionCallOutputPayload {
     where
         D: Deserializer<'de>,
     {
-        let body = FunctionCallOutputBody::deserialize(deserializer)?;
-        Ok(FunctionCallOutputPayload {
-            body,
-            success: None,
-        })
+        #[derive(Deserialize)]
+        #[serde(untagged)]
+        enum WirePayload {
+            Body(FunctionCallOutputBody),
+            WithMetadata {
+                content: FunctionCallOutputBody,
+                success: Option<bool>,
+            },
+        }
+
+        match WirePayload::deserialize(deserializer)? {
+            WirePayload::Body(body) => Ok(FunctionCallOutputPayload {
+                body,
+                success: None,
+            }),
+            WirePayload::WithMetadata { content, success } => Ok(FunctionCallOutputPayload {
+                body: content,
+                success,
+            }),
+        }
     }
 }
 
@@ -2409,7 +2432,7 @@ mod tests {
     }
 
     #[test]
-    fn serializes_failure_as_string() -> Result<()> {
+    fn serializes_failure_as_object_with_success() -> Result<()> {
         let item = ResponseInputItem::FunctionCallOutput {
             call_id: "call1".into(),
             output: FunctionCallOutputPayload {
@@ -2421,7 +2444,8 @@ mod tests {
         let json = serde_json::to_string(&item)?;
         let v: serde_json::Value = serde_json::from_str(&json)?;
 
-        assert_eq!(v.get("output").unwrap().as_str().unwrap(), "bad");
+        assert_eq!(v["output"]["content"], "bad");
+        assert_eq!(v["output"]["success"], false);
         Ok(())
     }
 
@@ -2548,6 +2572,18 @@ mod tests {
             serde_json::to_string(&payload)?,
             serde_json::to_string(&expected_items)?
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn deserializes_output_payload_with_success_metadata() -> Result<()> {
+        let json = r#"{"content":"ok","success":true}"#;
+
+        let payload: FunctionCallOutputPayload = serde_json::from_str(json)?;
+
+        assert_eq!(payload.body, FunctionCallOutputBody::Text("ok".into()));
+        assert_eq!(payload.success, Some(true));
 
         Ok(())
     }
