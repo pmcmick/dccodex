@@ -2,12 +2,15 @@
 
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
+use std::time::Instant;
 
 use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
+use codex_protocol::protocol::AskForApproval;
 use codex_protocol::protocol::EventMsg;
 use codex_protocol::protocol::Op;
+use codex_protocol::protocol::SandboxPolicy;
 use codex_protocol::user_input::UserInput;
 use core_test_support::fs_wait;
 use core_test_support::responses;
@@ -126,8 +129,13 @@ printf '%s\n' '{"append_prompt_text":"hook-added context"}'
     wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
 
     let request = response_mock.single_request();
+    let input_texts = request
+        .message_input_texts("user")
+        .into_iter()
+        .filter(|text| !text.starts_with("<environment_context>"))
+        .collect::<Vec<_>>();
     assert_eq!(
-        request.message_input_texts("user"),
+        input_texts,
         vec!["hello world".to_string(), "hook-added context".to_string()]
     );
 
@@ -862,25 +870,18 @@ printf '%s\n' '{"decision":"replace","output":"synthetic tool result","success":
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn tool_success_and_failure_hooks_emit_distinct_payloads() -> anyhow::Result<()> {
+async fn post_tool_use_success_hook_emits_payload() -> anyhow::Result<()> {
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
     let success_call_id = "call-shell-success";
-    let failure_call_id = "call-shell-failure";
     let success_arguments = json!({
         "command": "printf 'tool success'",
         "timeout_ms": 2_000,
         "login": false,
     })
     .to_string();
-    let failure_arguments = json!({
-        "command": "printf 'tool failure'; exit 7",
-        "timeout_ms": 2_000,
-        "login": false,
-    })
-    .to_string();
-    mount_sse_sequence(
+    let completion_mock = mount_sse_sequence(
         &server,
         vec![
             sse(vec![
@@ -891,15 +892,6 @@ async fn tool_success_and_failure_hooks_emit_distinct_payloads() -> anyhow::Resu
             sse(vec![
                 ev_assistant_message("msg-1", "done"),
                 ev_completed("resp-2"),
-            ]),
-            sse(vec![
-                ev_response_created("resp-3"),
-                ev_function_call(failure_call_id, "shell_command", &failure_arguments),
-                ev_completed("resp-3"),
-            ]),
-            sse(vec![
-                ev_assistant_message("msg-2", "done"),
-                ev_completed("resp-4"),
             ]),
         ],
     )
@@ -922,6 +914,77 @@ mv "${{tmp_path}}" "${{payload_path}}"
     )?;
     std::fs::set_permissions(&success_hook, std::fs::Permissions::from_mode(0o755))?;
 
+    let success_hook_str = success_hook.to_str().unwrap().to_string();
+
+    let test = test_codex()
+        .with_config(move |cfg| {
+            cfg.notify_on_post_tool_use_success = Some(vec![vec![success_hook_str]]);
+            cfg.include_apply_patch_tool = true;
+        })
+        .build(&server)
+        .await?;
+
+    test.submit_turn_with_policies(
+        "run a successful shell command",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+    completion_mock
+        .wait_for_request_count(2, Duration::from_secs(10))
+        .await;
+    let success_payload =
+        wait_for_json_file_matching(&success_file, Duration::from_secs(30), |payload| {
+            payload["hook_event"]["event_type"] == json!("post_tool_use_success")
+                && payload["hook_event"]["call_id"] == json!(success_call_id)
+                && payload["hook_event"]["tool_name"] == json!("shell_command")
+        })
+        .await?;
+    assert_eq!(
+        success_payload["hook_event"]["event_type"],
+        json!("post_tool_use_success")
+    );
+    assert_eq!(
+        success_payload["hook_event"]["call_id"],
+        json!(success_call_id)
+    );
+    assert_eq!(
+        success_payload["hook_event"]["tool_name"],
+        json!("shell_command")
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn tool_failure_hook_emits_payload() -> anyhow::Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let failure_call_id = "call-shell-failure";
+    let failure_arguments = json!({
+        "command": "printf 'tool failure'; exit 7",
+        "timeout_ms": 2_000,
+        "login": false,
+    })
+    .to_string();
+    let completion_mock = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                ev_function_call(failure_call_id, "shell_command", &failure_arguments),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_assistant_message("msg-1", "done"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let hook_dir = TempDir::new()?;
     let failure_hook = hook_dir.path().join("tool-failure.sh");
     let failure_file = hook_dir.path().join("tool-failure.json");
     std::fs::write(
@@ -937,60 +1000,33 @@ mv "${{tmp_path}}" "${{payload_path}}"
         ),
     )?;
     std::fs::set_permissions(&failure_hook, std::fs::Permissions::from_mode(0o755))?;
-
-    let success_hook_str = success_hook.to_str().unwrap().to_string();
     let failure_hook_str = failure_hook.to_str().unwrap().to_string();
 
-    let TestCodex { codex, .. } = test_codex()
+    let test = test_codex()
         .with_config(move |cfg| {
-            cfg.notify_on_post_tool_use_success = Some(vec![vec![success_hook_str]]);
             cfg.notify_on_tool_failure = Some(vec![vec![failure_hook_str]]);
             cfg.include_apply_patch_tool = true;
         })
         .build(&server)
         .await?;
 
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "run a successful shell command".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
+    test.submit_turn_with_policies(
+        "run a failing shell command",
+        AskForApproval::Never,
+        SandboxPolicy::DangerFullAccess,
+    )
+    .await?;
+    completion_mock
+        .wait_for_request_count(2, Duration::from_secs(10))
+        .await;
+    let failure_payload =
+        wait_for_json_file_matching(&failure_file, Duration::from_secs(30), |payload| {
+            payload["hook_event"]["event_type"] == json!("tool_failure")
+                && payload["hook_event"]["call_id"] == json!(failure_call_id)
+                && payload["hook_event"]["tool_name"] == json!("shell_command")
+                && payload["hook_event"]["error_preview"].is_string()
         })
         .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    codex
-        .submit(Op::UserInput {
-            items: vec![UserInput::Text {
-                text: "run a failing shell command".into(),
-                text_elements: Vec::new(),
-            }],
-            final_output_json_schema: None,
-        })
-        .await?;
-    wait_for_event(&codex, |ev| matches!(ev, EventMsg::TurnComplete(_))).await;
-
-    fs_wait::wait_for_path_exists(&success_file, Duration::from_secs(5)).await?;
-    let success_payload: Value =
-        serde_json::from_str(&tokio::fs::read_to_string(&success_file).await?)?;
-    assert_eq!(
-        success_payload["hook_event"]["event_type"],
-        json!("post_tool_use_success")
-    );
-    assert_eq!(
-        success_payload["hook_event"]["call_id"],
-        json!(success_call_id)
-    );
-    assert_eq!(
-        success_payload["hook_event"]["tool_name"],
-        json!("shell_command")
-    );
-
-    fs_wait::wait_for_path_exists(&failure_file, Duration::from_secs(5)).await?;
-    let failure_payload: Value =
-        serde_json::from_str(&tokio::fs::read_to_string(&failure_file).await?)?;
     assert_eq!(
         failure_payload["hook_event"]["event_type"],
         json!("tool_failure")
@@ -1017,7 +1053,8 @@ async fn manual_compaction_hook_emits_remote_lifecycle_payloads() -> anyhow::Res
     skip_if_no_network!(Ok(()));
 
     let server = start_mock_server().await;
-    responses::mount_compact_user_history_with_summary_once(&server, "Compacted summary").await;
+    responses::mount_compact_user_history_with_summary_once_unchecked(&server, "Compacted summary")
+        .await;
 
     let hook_dir = TempDir::new()?;
     let hook_script = hook_dir.path().join("compaction-hook.sh");
@@ -1069,4 +1106,29 @@ printf '%s\n' "${{@: -1}}" >> "${{payload_path}}"
     );
 
     Ok(())
+}
+async fn wait_for_json_file_matching(
+    path: &std::path::Path,
+    timeout: Duration,
+    predicate: impl Fn(&Value) -> bool,
+) -> anyhow::Result<Value> {
+    let start = Instant::now();
+    loop {
+        if path.exists()
+            && let Ok(contents) = tokio::fs::read_to_string(path).await
+            && let Ok(payload) = serde_json::from_str::<Value>(&contents)
+            && predicate(&payload)
+        {
+            return Ok(payload);
+        }
+
+        if start.elapsed() >= timeout {
+            anyhow::bail!(
+                "timed out waiting for matching JSON payload at {}",
+                path.display()
+            );
+        }
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+    }
 }
