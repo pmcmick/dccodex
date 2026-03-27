@@ -457,7 +457,6 @@ INSERT INTO threads (
     agent_role,
     agent_path,
     parent_thread_id,
-    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -487,7 +486,6 @@ ON CONFLICT(id) DO NOTHING
         .bind(metadata.agent_role.as_deref())
         .bind(metadata.agent_path.as_deref())
         .bind(metadata.parent_thread_id.as_ref().map(ToString::to_string))
-        .bind(metadata.agent_path.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.model.as_deref())
         .bind(
@@ -588,7 +586,6 @@ INSERT INTO threads (
     agent_role,
     agent_path,
     parent_thread_id,
-    agent_path,
     model_provider,
     model,
     reasoning_effort,
@@ -615,7 +612,6 @@ ON CONFLICT(id) DO UPDATE SET
     agent_role = excluded.agent_role,
     agent_path = excluded.agent_path,
     parent_thread_id = excluded.parent_thread_id,
-    agent_path = excluded.agent_path,
     model_provider = excluded.model_provider,
     model = excluded.model,
     reasoning_effort = excluded.reasoning_effort,
@@ -642,7 +638,6 @@ ON CONFLICT(id) DO UPDATE SET
         .bind(metadata.agent_role.as_deref())
         .bind(metadata.agent_path.as_deref())
         .bind(metadata.parent_thread_id.as_ref().map(ToString::to_string))
-        .bind(metadata.agent_path.as_deref())
         .bind(metadata.model_provider.as_str())
         .bind(metadata.model.as_deref())
         .bind(

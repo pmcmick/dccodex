@@ -8634,6 +8634,7 @@ mod tests {
             ephemeral: false,
             reasoning_effort: None,
             personality: None,
+            parent_thread_id: None,
             session_source: SessionSource::Cli,
         };
 

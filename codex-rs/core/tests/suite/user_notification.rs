@@ -3,7 +3,7 @@
 use std::os::unix::fs::PermissionsExt;
 use std::time::Duration;
 
-use codex_core::features::Feature;
+use codex_features::Feature;
 use codex_protocol::ThreadId;
 use codex_protocol::openai_models::ReasoningEffort;
 use codex_protocol::protocol::EventMsg;

@@ -466,6 +466,7 @@ impl ThreadManager {
             metrics_service_name,
             parent_thread_id,
             None,
+            /*user_shell_override*/ None,
         ))
         .await
     }
@@ -787,6 +788,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            None,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -815,6 +817,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
+            None,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -848,7 +851,6 @@ impl ThreadManagerState {
             None,
             None,
             parent_thread_id,
-            None,
             parent_trace,
             user_shell_override,
         ))

@@ -399,7 +399,6 @@ impl ToolRegistry {
             None
         };
         let success_output_preview = output_preview.clone();
-        let after_tool_use_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
         // Deprecated: this is the legacy AfterToolUse hook. Prefer the new PostToolUse
         let after_tool_use_error = dispatch_after_tool_use_hook(AfterToolUseHookDispatch {
             invocation: &invocation,
@@ -719,7 +718,7 @@ async fn dispatch_pre_tool_use_hook(
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
-            cwd: turn.cwd.clone(),
+            cwd: turn.cwd.to_path_buf(),
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::PreToolUse {
@@ -838,7 +837,7 @@ async fn dispatch_tool_failure_hook(
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
-            cwd: turn.cwd.clone(),
+            cwd: turn.cwd.to_path_buf(),
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::ToolFailure {
@@ -901,7 +900,7 @@ async fn dispatch_post_tool_use_success_hook(
         .hooks()
         .dispatch(HookPayload {
             session_id: session.conversation_id,
-            cwd: turn.cwd.clone(),
+            cwd: turn.cwd.to_path_buf(),
             client: turn.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::PostToolUseSuccess {

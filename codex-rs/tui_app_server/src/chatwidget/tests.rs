@@ -230,6 +230,7 @@ async fn resumed_initial_messages_render_history() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -343,6 +344,7 @@ async fn replayed_user_message_preserves_text_elements_and_local_images() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -404,6 +406,7 @@ async fn replayed_user_message_preserves_remote_image_urls() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -472,6 +475,7 @@ async fn session_configured_syncs_widget_config_permissions_and_cwd() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -515,6 +519,7 @@ async fn replayed_user_message_with_only_remote_images_renders_history_cell() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -568,6 +573,7 @@ async fn replayed_user_message_with_only_local_images_does_not_render_history_ce
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -680,6 +686,7 @@ async fn submission_preserves_text_elements_and_local_images() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -764,6 +771,7 @@ async fn submission_with_remote_and_local_images_keeps_local_placeholder_numberi
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -859,6 +867,7 @@ async fn enter_with_only_remote_images_submits_user_turn() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -924,6 +933,7 @@ async fn shift_enter_with_only_remote_images_does_not_submit_user_turn() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -964,6 +974,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_modal_is_active() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -1004,6 +1015,7 @@ async fn enter_with_only_remote_images_does_not_submit_when_input_disabled() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -1047,6 +1059,7 @@ async fn submission_prefers_selected_duplicate_skill_path() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -5176,6 +5189,7 @@ async fn replayed_reasoning_item_hides_raw_reasoning_when_disabled() {
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            parent_thread_id: None,
             thread_name: None,
             model: "test-model".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -5221,6 +5235,7 @@ async fn replayed_reasoning_item_shows_raw_reasoning_when_enabled() {
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            parent_thread_id: None,
             thread_name: None,
             model: "test-model".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -5469,6 +5484,7 @@ async fn submit_user_message_emits_structured_plugin_mentions_from_bindings() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -6787,6 +6803,7 @@ async fn plan_slash_command_with_args_submits_prompt_in_plan_mode() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: ThreadId::new(),
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -9960,6 +9977,7 @@ async fn bang_shell_command_submits_run_user_shell_command_in_app_server_tui() {
     let configured = codex_protocol::protocol::SessionConfiguredEvent {
         session_id: conversation_id,
         forked_from_id: None,
+        parent_thread_id: None,
         thread_name: None,
         model: "test-model".to_string(),
         model_provider_id: "test-provider".to_string(),
@@ -10399,6 +10417,7 @@ async fn permissions_selection_marks_guardian_approvals_current_after_session_co
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            parent_thread_id: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),
@@ -10447,6 +10466,7 @@ async fn permissions_selection_marks_guardian_approvals_current_with_custom_work
         msg: EventMsg::SessionConfigured(SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            parent_thread_id: None,
             thread_name: None,
             model: "gpt-test".to_string(),
             model_provider_id: "test-provider".to_string(),

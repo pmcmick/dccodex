@@ -2878,6 +2878,7 @@ mod tests {
         SessionConfiguredEvent {
             session_id: ThreadId::new(),
             forked_from_id: None,
+            parent_thread_id: None,
             thread_name: None,
             model: model.to_string(),
             model_provider_id: "test-provider".to_string(),

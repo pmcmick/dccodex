@@ -2785,7 +2785,7 @@ impl Session {
             self.dispatch_non_blocking_hook_event(
                 hook_event_name,
                 hook_event,
-                turn_context.cwd.clone(),
+                turn_context.cwd.to_path_buf(),
                 turn_context.app_server_client_name.clone(),
                 Some(turn_context.sub_id.as_str()),
             )
@@ -2819,7 +2819,7 @@ impl Session {
                             last_agent_message: event.last_agent_message.clone(),
                         },
                     },
-                    turn_context.cwd.clone(),
+                    turn_context.cwd.to_path_buf(),
                     turn_context.app_server_client_name.clone(),
                     Some(event.turn_id.as_str()),
                 )
@@ -2950,10 +2950,10 @@ impl Session {
                             thread_id: self.conversation_id,
                             model: configured.model.clone(),
                             model_provider_id: configured.model_provider_id.clone(),
-                            cwd: configured.cwd.clone(),
+                            cwd: configured.cwd.to_path_buf(),
                         },
                     },
-                    configured.cwd.clone(),
+                    configured.cwd.to_path_buf(),
                     client,
                 ))
             }
@@ -2961,7 +2961,7 @@ impl Session {
                 let (cwd, client) = {
                     let state = self.state.lock().await;
                     (
-                        state.session_configuration.cwd.clone(),
+                        state.session_configuration.cwd.to_path_buf(),
                         state.session_configuration.app_server_client_name.clone(),
                     )
                 };
@@ -4828,14 +4828,12 @@ fn submission_dispatch_span(sub: &Submission) -> tracing::Span {
 
 /// Operation handlers
 mod handlers {
+    use crate::SkillError;
     use crate::codex::Session;
     use crate::codex::SessionSettingsUpdate;
     use crate::codex::SteerInputError;
     use crate::codex::detect_auto_plan_mode_trigger;
     use crate::codex::dispatch_hook_payload;
-    use crate::features::Feature;
-
-    use crate::SkillError;
     use crate::codex::spawn_review_thread;
     use crate::config::Config;
     use crate::config_loader::CloudRequirementsLoader;
@@ -5020,7 +5018,7 @@ mod handlers {
             "after_user_prompt_submit",
             HookPayload {
                 session_id: sess.conversation_id,
-                cwd: hook_cwd,
+                cwd: hook_cwd.to_path_buf(),
                 client: hook_client,
                 triggered_at: chrono::Utc::now(),
                 hook_event: HookEvent::AfterUserPromptSubmit {
@@ -5173,7 +5171,9 @@ mod handlers {
         communication: InterAgentCommunication,
     ) {
         let pending_item = communication.to_response_input_item();
-        if let Ok(()) = sess.inject_response_items(vec![pending_item.clone()]).await {
+        if !communication.trigger_turn
+            && let Ok(()) = sess.inject_response_items(vec![pending_item.clone()]).await
+        {
             return;
         }
 
@@ -7740,7 +7740,7 @@ async fn try_run_sampling_request(
         "before_model_request",
         HookPayload {
             session_id: sess.conversation_id,
-            cwd: turn_context.cwd.clone(),
+            cwd: turn_context.cwd.to_path_buf(),
             client: turn_context.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::BeforeModelRequest {
@@ -7881,7 +7881,7 @@ async fn try_run_sampling_request(
                     "after_model_response_created",
                     HookPayload {
                         session_id: sess.conversation_id,
-                        cwd: turn_context.cwd.clone(),
+                        cwd: turn_context.cwd.to_path_buf(),
                         client: turn_context.app_server_client_name.clone(),
                         triggered_at: chrono::Utc::now(),
                         hook_event: HookEvent::AfterModelResponseCreated {
@@ -8100,7 +8100,7 @@ async fn try_run_sampling_request(
                     "after_model_response_completed",
                     HookPayload {
                         session_id: sess.conversation_id,
-                        cwd: turn_context.cwd.clone(),
+                        cwd: turn_context.cwd.to_path_buf(),
                         client: turn_context.app_server_client_name.clone(),
                         triggered_at: chrono::Utc::now(),
                         hook_event: HookEvent::AfterModelResponseCompleted {
@@ -8210,7 +8210,7 @@ async fn try_run_sampling_request(
                         "plan_finalized",
                         HookPayload {
                             session_id: sess.conversation_id,
-                            cwd: turn_context.cwd.clone(),
+                            cwd: turn_context.cwd.to_path_buf(),
                             client: turn_context.app_server_client_name.clone(),
                             triggered_at: chrono::Utc::now(),
                             hook_event: HookEvent::PlanFinalized {

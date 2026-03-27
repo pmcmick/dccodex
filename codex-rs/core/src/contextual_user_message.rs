@@ -1,6 +1,5 @@
 use codex_instructions::AGENTS_MD_FRAGMENT;
 use codex_instructions::ContextualUserFragmentDefinition;
-use codex_instructions::SKILL_FRAGMENT;
 use codex_protocol::items::HookPromptItem;
 use codex_protocol::items::parse_hook_prompt_fragment;
 use codex_protocol::models::ContentItem;

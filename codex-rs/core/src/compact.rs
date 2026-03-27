@@ -180,7 +180,7 @@ pub(crate) async fn dispatch_compaction_hook(
         .hooks()
         .dispatch(HookPayload {
             session_id: sess.conversation_id,
-            cwd: turn_context.cwd.clone(),
+            cwd: turn_context.cwd.to_path_buf(),
             client: turn_context.app_server_client_name.clone(),
             triggered_at: chrono::Utc::now(),
             hook_event: HookEvent::Compaction {

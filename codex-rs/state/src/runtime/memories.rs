@@ -167,6 +167,7 @@ SELECT
     updated_at,
     source,
     agent_path,
+    parent_thread_id,
     agent_nickname,
     agent_role,
     model_provider,
