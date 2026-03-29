@@ -1,0 +1,15 @@
+---
+source: tui/src/chatwidget/tests.rs
+expression: popup
+---
+  Hooks
+  7 hooks configured
+
+› 1. hooks.json · PreToolUse (2)        Before tool execution Configured via hooks.json.
+  2. hooks.json · PostToolUse (1)       After tool execution
+  3. hooks.json · UserPromptSubmit (1)  When the user submits a prompt
+  4. config.toml · Notification (1)     When notifications are sent
+  5. config.toml · PreToolUse (1)       Before tool execution
+  6. config.toml · ToolFailure (1)      When a tool fails
+
+  This menu is read-only. To add or modify hooks, edit hooks.json or config.toml directly.

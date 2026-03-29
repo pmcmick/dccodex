@@ -93,7 +93,7 @@ impl ChatWidget {
 fn hooks_selection_item(group: ConfiguredHookGroupSummary) -> SelectionItem {
     SelectionItem {
         name: format!("{} ({})", group.label, group.count),
-        name_prefix_spans: vec![format!("{} · ", group.source.label()).dim().into()],
+        name_prefix_spans: vec![format!("{} · ", group.source.label()).dim()],
         description: Some(group.description.to_string()),
         selected_description: Some(format!(
             "{} Configured via {}.",

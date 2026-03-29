@@ -1,6 +1,5 @@
 ---
-source: tui/src/chatwidget/tests.rs
-assertion_line: 7356
+source: tui_app_server/src/chatwidget/tests.rs
 expression: popup
 ---
   Hooks

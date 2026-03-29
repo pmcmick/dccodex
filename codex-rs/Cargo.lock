@@ -2625,17 +2625,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "codex-tools"
-version = "0.117.1"
-dependencies = [
- "codex-protocol",
- "pretty_assertions",
- "rmcp",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "codex-tui"
 version = "0.117.1"
 dependencies = [
