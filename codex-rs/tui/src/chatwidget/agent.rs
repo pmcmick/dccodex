@@ -41,7 +41,13 @@ pub(crate) fn spawn_agent(
             session_configured,
             ..
         } = match server
-            .start_thread_with_parent(config, Vec::new(), false, None, parent_thread_id)
+            .start_thread_with_parent(
+                config,
+                Vec::new(),
+                /*persist_extended_history*/ false,
+                /*metrics_service_name*/ None,
+                parent_thread_id,
+            )
             .await
         {
             Ok(v) => v,

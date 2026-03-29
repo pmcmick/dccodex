@@ -68,7 +68,7 @@ pub(crate) async fn run_inline_auto_compact_task(
         HookCompactionTrigger::AutoMidTurn,
         HookCompactionStrategy::Local,
         HookCompactionStatus::Started,
-        None,
+        /*error*/ None,
     )
     .await;
     let prompt = turn_context.compact_prompt().to_string();
@@ -93,7 +93,7 @@ pub(crate) async fn run_inline_auto_compact_task(
                 HookCompactionTrigger::AutoMidTurn,
                 HookCompactionStrategy::Local,
                 HookCompactionStatus::Completed,
-                None,
+                /*error*/ None,
             )
             .await;
             Ok(())
@@ -130,7 +130,7 @@ pub(crate) async fn run_compact_task(
         HookCompactionTrigger::Manual,
         HookCompactionStrategy::Local,
         HookCompactionStatus::Started,
-        None,
+        /*error*/ None,
     )
     .await;
     match run_compact_task_inner(
@@ -148,7 +148,7 @@ pub(crate) async fn run_compact_task(
                 HookCompactionTrigger::Manual,
                 HookCompactionStrategy::Local,
                 HookCompactionStatus::Completed,
-                None,
+                /*error*/ None,
             )
             .await;
             Ok(())

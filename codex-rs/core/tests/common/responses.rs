@@ -1061,14 +1061,24 @@ pub async fn mount_compact_user_history_with_summary_sequence(
     server: &MockServer,
     summary_texts: Vec<String>,
 ) -> ResponseMock {
-    mount_compact_user_history_with_summary_sequence_inner(server, summary_texts, true).await
+    mount_compact_user_history_with_summary_sequence_inner(
+        server,
+        summary_texts,
+        /*expect_exact_calls*/ true,
+    )
+    .await
 }
 
 pub async fn mount_compact_user_history_with_summary_sequence_unchecked(
     server: &MockServer,
     summary_texts: Vec<String>,
 ) -> ResponseMock {
-    mount_compact_user_history_with_summary_sequence_inner(server, summary_texts, false).await
+    mount_compact_user_history_with_summary_sequence_inner(
+        server,
+        summary_texts,
+        /*expect_exact_calls*/ false,
+    )
+    .await
 }
 
 async fn mount_compact_user_history_with_summary_sequence_inner(

@@ -406,7 +406,14 @@ impl ThreadManager {
     pub async fn start_thread(&self, config: Config) -> CodexResult<NewThread> {
         // Box delegated thread-spawn futures so these convenience wrappers do
         // not inline the full spawn path into every caller's async state.
-        Box::pin(self.start_thread_with_parent(config, Vec::new(), false, None, None)).await
+        Box::pin(self.start_thread_with_parent(
+            config,
+            Vec::new(),
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*parent_thread_id*/ None,
+        ))
+        .await
     }
 
     pub async fn start_thread_with_tools(
@@ -420,7 +427,7 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             /*metrics_service_name*/ None,
-            /*parent_trace*/ None,
+            /*parent_thread_id*/ None,
         ))
         .await
     }
@@ -441,7 +448,7 @@ impl ThreadManager {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            None,
+            /*parent_thread_id*/ None,
             parent_trace,
             /*user_shell_override*/ None,
         ))
@@ -465,7 +472,7 @@ impl ThreadManager {
             persist_extended_history,
             metrics_service_name,
             parent_thread_id,
-            None,
+            /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
         .await
@@ -505,7 +512,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
-            None,
+            /*parent_thread_id*/ None,
             parent_trace,
             /*user_shell_override*/ None,
         ))
@@ -525,7 +532,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
-            None,
+            /*parent_thread_id*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
@@ -548,7 +555,7 @@ impl ThreadManager {
             Vec::new(),
             /*persist_extended_history*/ false,
             /*metrics_service_name*/ None,
-            None,
+            /*parent_thread_id*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ Some(user_shell_override),
         ))
@@ -656,7 +663,7 @@ impl ThreadManager {
             Vec::new(),
             persist_extended_history,
             /*metrics_service_name*/ None,
-            None,
+            /*parent_thread_id*/ None,
             parent_trace,
             /*user_shell_override*/ None,
         ))
@@ -728,11 +735,11 @@ impl ThreadManagerState {
             config,
             agent_control,
             self.session_source.clone(),
-            false,
-            None,
-            None,
-            None,
-            None,
+            /*persist_extended_history*/ false,
+            /*metrics_service_name*/ None,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
+            /*parent_thread_id*/ None,
         ))
         .await
     }
@@ -788,7 +795,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
-            None,
+            /*parent_thread_id*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -817,7 +824,7 @@ impl ThreadManagerState {
             /*metrics_service_name*/ None,
             inherited_shell_snapshot,
             inherited_exec_policy,
-            None,
+            /*parent_thread_id*/ None,
             /*parent_trace*/ None,
             /*user_shell_override*/ None,
         ))
@@ -848,8 +855,8 @@ impl ThreadManagerState {
             dynamic_tools,
             persist_extended_history,
             metrics_service_name,
-            None,
-            None,
+            /*inherited_shell_snapshot*/ None,
+            /*inherited_exec_policy*/ None,
             parent_thread_id,
             parent_trace,
             user_shell_override,

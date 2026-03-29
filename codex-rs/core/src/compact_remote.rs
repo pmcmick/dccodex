@@ -40,7 +40,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
         HookCompactionTrigger::AutoMidTurn,
         HookCompactionStrategy::Remote,
         HookCompactionStatus::Started,
-        None,
+        /*error*/ None,
     )
     .await;
     match run_remote_compact_task_inner(&sess, &turn_context, initial_context_injection).await {
@@ -51,7 +51,7 @@ pub(crate) async fn run_inline_remote_auto_compact_task(
                 HookCompactionTrigger::AutoMidTurn,
                 HookCompactionStrategy::Remote,
                 HookCompactionStatus::Completed,
-                None,
+                /*error*/ None,
             )
             .await;
             Ok(())
@@ -87,7 +87,7 @@ pub(crate) async fn run_remote_compact_task(
         HookCompactionTrigger::Manual,
         HookCompactionStrategy::Remote,
         HookCompactionStatus::Started,
-        None,
+        /*error*/ None,
     )
     .await;
     match run_remote_compact_task_inner(&sess, &turn_context, InitialContextInjection::DoNotInject)
@@ -100,7 +100,7 @@ pub(crate) async fn run_remote_compact_task(
                 HookCompactionTrigger::Manual,
                 HookCompactionStrategy::Remote,
                 HookCompactionStatus::Completed,
-                None,
+                /*error*/ None,
             )
             .await;
             Ok(())

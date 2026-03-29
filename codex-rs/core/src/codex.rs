@@ -2983,8 +2983,14 @@ impl Session {
         self.persist_rollout_items(&rollout_items).await;
         self.deliver_event_raw(event).await;
         if let Some((hook_event_name, hook_event, cwd, client)) = session_hook_dispatch {
-            self.dispatch_non_blocking_hook_event(hook_event_name, hook_event, cwd, client, None)
-                .await;
+            self.dispatch_non_blocking_hook_event(
+                hook_event_name,
+                hook_event,
+                cwd,
+                client,
+                /*turn_id*/ None,
+            )
+            .await;
         }
     }
 

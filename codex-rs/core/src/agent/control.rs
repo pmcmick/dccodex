@@ -249,7 +249,7 @@ impl AgentControl {
                             /*metrics_service_name*/ None,
                             inherited_shell_snapshot,
                             inherited_exec_policy,
-                            None,
+                            /*parent_thread_id*/ None,
                         )
                         .await?
                 }

@@ -1636,7 +1636,7 @@ impl App {
                 usize::MAX,
                 self.config.clone(),
                 path.clone(),
-                false,
+                /*persist_extended_history*/ false,
                 /*parent_trace*/ None,
             )
             .await
@@ -4185,7 +4185,7 @@ impl App {
             AppEvent::StartChildSessionWithInitialMessage { text } => {
                 self.session_telemetry.counter(
                     "codex.thread.new",
-                    1,
+                    /*inc*/ 1,
                     &[("source", "plan_handoff")],
                 );
                 self.start_child_session_with_initial_message(tui, text)
