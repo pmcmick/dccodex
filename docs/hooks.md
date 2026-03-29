@@ -53,6 +53,10 @@ Codex reads hooks from `config.toml`.
 
 For general configuration details, see [config.md](./config.md).
 
+To inspect the hooks currently configured for the running session, use `/hooks` in the TUI.
+The hooks view is read-only and shows the effective hook groups discovered from `hooks.json`
+and `config.toml`.
+
 ## How hook commands are defined
 
 Each hook is configured as an argv array. Codex executes the configured program and appends the hook payload JSON as the final argument.

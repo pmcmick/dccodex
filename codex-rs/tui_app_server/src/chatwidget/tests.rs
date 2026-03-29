@@ -8001,6 +8001,61 @@ fn render_loaded_plugins_popup(chat: &mut ChatWidget, response: PluginListRespon
     render_bottom_popup(chat, 100)
 }
 
+fn configure_hooks_popup(chat: &mut ChatWidget) -> tempfile::TempDir {
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    std::fs::write(
+        temp.path().join("hooks.json"),
+        r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "*",
+        "hooks": [
+          { "type": "command", "command": "echo before-1" },
+          { "type": "command", "command": "echo before-2" }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          { "type": "command", "command": "echo after" }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "echo prompt" }
+        ]
+      }
+    ]
+  }
+}"#,
+    )
+    .expect("write hooks.json");
+
+    chat.set_feature_enabled(Feature::CodexHooks, true);
+    chat.config.config_layer_stack = chat
+        .config
+        .config_layer_stack
+        .with_user_config(&config_toml_path, TomlValue::Table(Default::default()));
+    chat.config.notify = Some(vec![vec![
+        "python3".to_string(),
+        "/tmp/notify.py".to_string(),
+    ]]);
+    chat.config.notify_on_pre_tool_use =
+        Some(vec![vec!["python3".to_string(), "/tmp/pre.py".to_string()]]);
+    chat.config.notify_on_tool_failure = Some(vec![vec![
+        "python3".to_string(),
+        "/tmp/failure.py".to_string(),
+    ]]);
+
+    temp
+}
+
 fn plugins_test_detail(
     summary: PluginSummary,
     description: Option<&str>,
@@ -8063,6 +8118,17 @@ async fn plugins_popup_loading_state_snapshot() {
         "expected /plugins to open in a loading state before the marketplace arrives, got:\n{popup}"
     );
     assert_snapshot!("plugins_popup_loading_state", popup);
+}
+
+#[tokio::test]
+async fn hooks_popup_snapshot_lists_configured_hooks() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(None).await;
+    let _temp = configure_hooks_popup(&mut chat);
+
+    chat.add_hooks_output();
+
+    let popup = render_bottom_popup(&chat, 100);
+    assert_snapshot!("hooks_popup", popup);
 }
 
 #[tokio::test]

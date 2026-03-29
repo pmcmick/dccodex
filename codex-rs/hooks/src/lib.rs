@@ -3,6 +3,7 @@ pub mod events;
 mod legacy_notify;
 mod registry;
 mod schema;
+mod summary;
 mod types;
 mod user_notification;
 
@@ -23,6 +24,10 @@ pub use registry::Hooks;
 pub use registry::HooksConfig;
 pub use registry::command_from_argv;
 pub use schema::write_schema_fixtures;
+pub use summary::ConfiguredHookGroupSummary;
+pub use summary::HookConfigurationSource;
+pub use summary::HookConfigurationSummary;
+pub use summary::summarize_configured_hooks;
 pub use types::Hook;
 pub use types::HookCompactionStatus;
 pub use types::HookCompactionStrategy;

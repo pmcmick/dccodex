@@ -304,6 +304,7 @@ mod skills;
 use self::skills::collect_tool_mentions;
 use self::skills::find_app_mentions;
 use self::skills::find_skill_mentions_with_tool_mentions;
+mod hooks;
 mod plugins;
 use self::plugins::PluginsCacheState;
 mod realtime;
@@ -4798,6 +4799,9 @@ impl ChatWidget {
             }
             SlashCommand::Theme => {
                 self.open_theme_picker();
+            }
+            SlashCommand::Hooks => {
+                self.add_hooks_output();
             }
             SlashCommand::Ps => {
                 self.add_ps_output();
