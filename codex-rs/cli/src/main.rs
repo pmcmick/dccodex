@@ -168,6 +168,7 @@ struct DebugCommand {
 #[derive(Debug, clap::Subcommand)]
 enum DebugSubcommand {
     /// Tooling: helps debug the app server.
+    #[cfg(feature = "internal-app-server-debug")]
     AppServer(DebugAppServerCommand),
 
     /// Internal: reset local memory state for a fresh start.
@@ -175,18 +176,21 @@ enum DebugSubcommand {
     ClearMemories,
 }
 
+#[cfg(feature = "internal-app-server-debug")]
 #[derive(Debug, Parser)]
 struct DebugAppServerCommand {
     #[command(subcommand)]
     subcommand: DebugAppServerSubcommand,
 }
 
+#[cfg(feature = "internal-app-server-debug")]
 #[derive(Debug, clap::Subcommand)]
 enum DebugAppServerSubcommand {
     // Send message to app server V2.
     SendMessageV2(DebugAppServerSendMessageV2Command),
 }
 
+#[cfg(feature = "internal-app-server-debug")]
 #[derive(Debug, Parser)]
 struct DebugAppServerSendMessageV2Command {
     #[arg(value_name = "USER_MESSAGE", required = true)]
@@ -502,6 +506,7 @@ fn run_execpolicycheck(cmd: ExecPolicyCheckCommand) -> anyhow::Result<()> {
     cmd.run()
 }
 
+#[cfg(feature = "internal-app-server-debug")]
 async fn run_debug_app_server_command(cmd: DebugAppServerCommand) -> anyhow::Result<()> {
     match cmd.subcommand {
         DebugAppServerSubcommand::SendMessageV2(cmd) => {
@@ -905,6 +910,7 @@ async fn cli_main(arg0_paths: Arg0DispatchPaths) -> anyhow::Result<()> {
             }
         },
         Some(Subcommand::Debug(DebugCommand { subcommand })) => match subcommand {
+            #[cfg(feature = "internal-app-server-debug")]
             DebugSubcommand::AppServer(cmd) => {
                 reject_remote_mode_for_subcommand(
                     root_remote.as_deref(),
