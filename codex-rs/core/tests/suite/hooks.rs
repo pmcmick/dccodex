@@ -174,6 +174,85 @@ if payload.get("prompt") == {blocked_prompt_json}:
     Ok(())
 }
 
+fn write_parallel_user_prompt_submit_hooks(home: &Path, contexts: &[&str]) -> Result<()> {
+    let log_path = home.join("user_prompt_submit_hook_log.jsonl");
+    let barrier_dir = home.join("user_prompt_submit_hook_barrier");
+    fs::create_dir_all(&barrier_dir).context("create user prompt submit barrier dir")?;
+
+    let marker_paths = (0..contexts.len())
+        .map(|index| barrier_dir.join(format!("hook_{index}.started")))
+        .collect::<Vec<_>>();
+    let marker_paths_json = serde_json::to_string(
+        &marker_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>(),
+    )
+    .context("serialize user prompt submit barrier paths")?;
+
+    let hook_entries = contexts
+        .iter()
+        .enumerate()
+        .map(|(index, context)| {
+            let script_path = home.join(format!("user_prompt_submit_hook_{index}.py"));
+            let context_json =
+                serde_json::to_string(context).context("serialize user prompt submit context")?;
+            let script = format!(
+                r#"import json
+from pathlib import Path
+import sys
+import time
+
+log_path = Path(r"{log_path}")
+marker_path = Path(r"{marker_path}")
+all_markers = [Path(path) for path in {marker_paths_json}]
+payload = json.load(sys.stdin)
+
+with log_path.open("a", encoding="utf-8") as handle:
+    handle.write(json.dumps(payload) + "\n")
+
+marker_path.write_text("started", encoding="utf-8")
+deadline = time.monotonic() + 2.0
+while time.monotonic() < deadline:
+    if all(path.exists() for path in all_markers):
+        print({context_json})
+        raise SystemExit(0)
+    time.sleep(0.02)
+
+sys.stderr.write("parallel user prompt submit hooks did not overlap\n")
+raise SystemExit(1)
+"#,
+                log_path = log_path.display(),
+                marker_path = marker_paths[index].display(),
+                marker_paths_json = marker_paths_json,
+                context_json = context_json,
+            );
+            fs::write(&script_path, script).with_context(|| {
+                format!(
+                    "write user prompt submit hook script fixture at {}",
+                    script_path.display()
+                )
+            })?;
+            Ok(serde_json::json!({
+                "type": "command",
+                "command": format!("python3 {}", script_path.display()),
+                "statusMessage": format!("running user prompt submit hook {index}"),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "UserPromptSubmit": [{
+                "hooks": hook_entries,
+            }]
+        }
+    });
+
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
 fn write_pre_tool_use_hook(
     home: &Path,
     matcher: Option<&str>,
@@ -233,6 +312,95 @@ elif mode == "exit_2":
     });
 
     fs::write(&script_path, script).context("write pre tool use hook script")?;
+    fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
+    Ok(())
+}
+
+fn write_parallel_pre_tool_use_hooks(
+    home: &Path,
+    matcher: Option<&str>,
+    reason: &str,
+) -> Result<()> {
+    let log_path = home.join("pre_tool_use_hook_log.jsonl");
+    let barrier_dir = home.join("pre_tool_use_hook_barrier");
+    fs::create_dir_all(&barrier_dir).context("create pre tool use barrier dir")?;
+
+    let marker_paths = (0..2)
+        .map(|index| barrier_dir.join(format!("hook_{index}.started")))
+        .collect::<Vec<_>>();
+    let marker_paths_json = serde_json::to_string(
+        &marker_paths
+            .iter()
+            .map(|path| path.display().to_string())
+            .collect::<Vec<_>>(),
+    )
+    .context("serialize pre tool use barrier paths")?;
+    let reason_json = serde_json::to_string(reason).context("serialize pre tool use reason")?;
+
+    let hook_entries = (0..2)
+        .map(|index| {
+            let script_path = home.join(format!("pre_tool_use_hook_{index}.py"));
+            let script = format!(
+                r#"import json
+from pathlib import Path
+import sys
+import time
+
+log_path = Path(r"{log_path}")
+marker_path = Path(r"{marker_path}")
+all_markers = [Path(path) for path in {marker_paths_json}]
+reason = {reason_json}
+payload = json.load(sys.stdin)
+
+marker_path.write_text("started", encoding="utf-8")
+deadline = time.monotonic() + 2.0
+while time.monotonic() < deadline:
+    if all(path.exists() for path in all_markers):
+        with log_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload) + "\n")
+        print(json.dumps({{
+            "hookSpecificOutput": {{
+                "hookEventName": "PreToolUse",
+                "permissionDecision": "deny",
+                "permissionDecisionReason": reason
+            }}
+        }}))
+        raise SystemExit(0)
+    time.sleep(0.02)
+
+sys.stderr.write("parallel pre tool use hooks did not overlap\n")
+raise SystemExit(1)
+"#,
+                log_path = log_path.display(),
+                marker_path = marker_paths[index].display(),
+                marker_paths_json = marker_paths_json,
+                reason_json = reason_json,
+            );
+            fs::write(&script_path, script).with_context(|| {
+                format!(
+                    "write pre tool use hook script fixture at {}",
+                    script_path.display()
+                )
+            })?;
+            Ok(serde_json::json!({
+                "type": "command",
+                "command": format!("python3 {}", script_path.display()),
+                "statusMessage": format!("running pre tool use hook {index}"),
+            }))
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let mut group = serde_json::json!({ "hooks": hook_entries });
+    if let Some(matcher) = matcher {
+        group["matcher"] = Value::String(matcher.to_string());
+    }
+
+    let hooks = serde_json::json!({
+        "hooks": {
+            "PreToolUse": [group]
+        }
+    });
+
     fs::write(home.join("hooks.json"), hooks.to_string()).context("write hooks.json")?;
     Ok(())
 }
@@ -843,6 +1011,63 @@ async fn blocked_user_prompt_submit_persists_additional_context_for_next_turn() 
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_user_prompt_submit_hooks_merge_context_without_serializing() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let response = mount_sse_once(
+        &server,
+        sse(vec![
+            ev_response_created("resp-1"),
+            ev_assistant_message("msg-1", "parallel hook prompt handled"),
+            ev_completed("resp-1"),
+        ]),
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) = write_parallel_user_prompt_submit_hooks(
+                home,
+                &["context from hook A", "context from hook B"],
+            ) {
+                panic!("failed to write parallel user prompt submit hooks: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    test.submit_turn("parallel hook prompt").await?;
+
+    let request = response.single_request();
+    let developer_texts = request.message_input_texts("developer");
+    assert!(
+        developer_texts.contains(&"context from hook A".to_string()),
+        "request should include context from the first parallel hook",
+    );
+    assert!(
+        developer_texts.contains(&"context from hook B".to_string()),
+        "request should include context from the second parallel hook",
+    );
+
+    let hook_inputs = read_user_prompt_submit_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 2);
+    assert!(
+        hook_inputs
+            .iter()
+            .all(|input| input["prompt"] == "parallel hook prompt"),
+        "both user prompt submit hooks should observe the same prompt",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn blocked_queued_prompt_does_not_strand_earlier_accepted_prompt() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1106,6 +1331,87 @@ async fn pre_tool_use_blocks_shell_command_before_execution() -> Result<()> {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn parallel_pre_tool_use_hooks_block_without_serializing() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "parallel-pretooluse-shell-command";
+    let marker = std::env::temp_dir().join("parallel-pretooluse-shell-command-marker");
+    let command = format!("printf blocked > {}", marker.display());
+    let args = serde_json::json!({ "command": command });
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_function_call(
+                    call_id,
+                    "shell_command",
+                    &serde_json::to_string(&args)?,
+                ),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "parallel hook blocked it"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_parallel_pre_tool_use_hooks(home, Some("^Bash$"), "blocked by parallel hooks")
+            {
+                panic!("failed to write parallel pre tool use hooks: {error}");
+            }
+        })
+        .with_config(|config| {
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+
+    if marker.exists() {
+        fs::remove_file(&marker).context("remove leftover parallel pre tool use marker")?;
+    }
+
+    test.submit_turn("run the blocked shell command with parallel hooks")
+        .await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("shell command output string");
+    assert!(
+        output.contains("blocked by parallel hooks"),
+        "blocked tool output should surface the parallel hook reason",
+    );
+    assert!(
+        !marker.exists(),
+        "blocked command should not create marker file"
+    );
+
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 2);
+    assert!(
+        hook_inputs
+            .iter()
+            .all(|input| input["tool_input"]["command"] == command),
+        "both pre tool use hooks should observe the same command",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 async fn pre_tool_use_blocks_local_shell_before_execution() -> Result<()> {
     skip_if_no_network!(Ok(()));
 
@@ -1353,6 +1659,94 @@ async fn pre_tool_use_does_not_fire_for_non_shell_tools() -> Result<()> {
     assert!(
         !hook_log_path.exists(),
         "non-shell tools should not trigger pre tool use hooks",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn pre_tool_use_blocks_apply_patch_before_execution() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "pretooluse-apply-patch";
+    let file_name = "hook_blocked_apply_patch.txt";
+    let patch = format!("*** Begin Patch\n*** Add File: {file_name}\n+blocked\n*** End Patch\n");
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_apply_patch_function_call(call_id, &patch),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "apply patch blocked"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_pre_tool_use_hook(home, Some("^Edit$"), "json_deny", "blocked apply patch")
+            {
+                panic!("failed to write pre tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.include_apply_patch_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    let target_path = test.workspace_path(file_name);
+    if target_path.exists() {
+        fs::remove_file(&target_path).context("remove leftover apply_patch target")?;
+    }
+
+    test.submit_turn("apply the blocked patch").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    let output_item = requests[1].function_call_output(call_id);
+    let output = output_item
+        .get("output")
+        .and_then(Value::as_str)
+        .expect("apply_patch output string");
+    assert!(
+        output.contains("Tool blocked by PreToolUse hook: blocked apply patch"),
+        "blocked apply_patch output should surface the hook reason",
+    );
+    assert!(
+        output.contains("Tool: Edit"),
+        "blocked apply_patch output should surface the canonical hook tool name",
+    );
+    assert!(
+        output.contains(&format!("File: {}", target_path.display())),
+        "blocked apply_patch output should surface the targeted file",
+    );
+    assert!(
+        !target_path.exists(),
+        "blocked apply_patch should not create the target file",
+    );
+
+    let hook_inputs = read_pre_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_name"], "Edit");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["file_path"],
+        Value::String(target_path.display().to_string()),
+    );
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["file_paths"],
+        Value::Array(vec![Value::String(target_path.display().to_string())]),
     );
 
     Ok(())
@@ -1811,6 +2205,86 @@ async fn post_tool_use_does_not_fire_for_non_shell_tools() -> Result<()> {
     assert!(
         !hook_log_path.exists(),
         "non-shell tools should not trigger post tool use hooks",
+    );
+
+    Ok(())
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn post_tool_use_records_additional_context_for_apply_patch() -> Result<()> {
+    skip_if_no_network!(Ok(()));
+
+    let server = start_mock_server().await;
+    let call_id = "posttooluse-apply-patch";
+    let file_name = "hook_post_apply_patch.txt";
+    let patch = format!("*** Begin Patch\n*** Add File: {file_name}\n+post hook\n*** End Patch\n");
+    let responses = mount_sse_sequence(
+        &server,
+        vec![
+            sse(vec![
+                ev_response_created("resp-1"),
+                core_test_support::responses::ev_apply_patch_function_call(call_id, &patch),
+                ev_completed("resp-1"),
+            ]),
+            sse(vec![
+                ev_response_created("resp-2"),
+                ev_assistant_message("msg-1", "apply patch post hook context observed"),
+                ev_completed("resp-2"),
+            ]),
+        ],
+    )
+    .await;
+
+    let post_context = "Remember the edit hook note.";
+    let mut builder = test_codex()
+        .with_pre_build_hook(|home| {
+            if let Err(error) =
+                write_post_tool_use_hook(home, Some("^Edit$"), "context", post_context)
+            {
+                panic!("failed to write post tool use hook test fixture: {error}");
+            }
+        })
+        .with_config(|config| {
+            config.include_apply_patch_tool = true;
+            config
+                .features
+                .enable(Feature::CodexHooks)
+                .expect("test config should allow feature update");
+        });
+    let test = builder.build(&server).await?;
+    let target_path = test.workspace_path(file_name);
+    if target_path.exists() {
+        fs::remove_file(&target_path).context("remove leftover apply_patch target")?;
+    }
+
+    test.submit_turn("apply the patch with post hook").await?;
+
+    let requests = responses.requests();
+    assert_eq!(requests.len(), 2);
+    assert!(
+        requests[1]
+            .message_input_texts("developer")
+            .contains(&post_context.to_string()),
+        "follow-up request should include apply_patch post tool use additional context",
+    );
+    assert!(
+        target_path.exists(),
+        "apply_patch should create the target file"
+    );
+
+    let hook_inputs = read_post_tool_use_hook_inputs(test.codex_home_path())?;
+    assert_eq!(hook_inputs.len(), 1);
+    assert_eq!(hook_inputs[0]["tool_name"], "Edit");
+    assert_eq!(hook_inputs[0]["tool_use_id"], call_id);
+    assert_eq!(
+        hook_inputs[0]["tool_input"]["file_path"],
+        Value::String(target_path.display().to_string()),
+    );
+    assert!(
+        hook_inputs[0]["tool_response"]
+            .as_str()
+            .is_some_and(|text| text.contains(file_name)),
+        "apply_patch post hook should receive a textual tool response mentioning the file",
     );
 
     Ok(())

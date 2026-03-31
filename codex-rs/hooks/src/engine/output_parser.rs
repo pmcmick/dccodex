@@ -16,6 +16,7 @@ pub(crate) struct SessionStartOutput {
 pub(crate) struct PreToolUseOutput {
     pub universal: UniversalOutput,
     pub block_reason: Option<String>,
+    pub additional_context: Option<String>,
     pub invalid_reason: Option<String>,
 }
 
@@ -107,10 +108,16 @@ pub(crate) fn parse_pre_tool_use(stdout: &str) -> Option<PreToolUseOutput> {
     } else {
         None
     };
+    let additional_context = if invalid_reason.is_none() {
+        hook_specific_output.and_then(|output| output.additional_context.clone())
+    } else {
+        None
+    };
 
     Some(PreToolUseOutput {
         universal,
         block_reason,
+        additional_context,
         invalid_reason,
     })
 }
@@ -258,13 +265,6 @@ fn unsupported_pre_tool_use_hook_specific_output(
 ) -> Option<String> {
     if output.updated_input.is_some() {
         Some("PreToolUse hook returned unsupported updatedInput".to_string())
-    } else if output
-        .additional_context
-        .as_deref()
-        .and_then(trimmed_reason)
-        .is_some()
-    {
-        Some("PreToolUse hook returned unsupported additionalContext".to_string())
     } else {
         match output.permission_decision {
             Some(PreToolUsePermissionDecisionWire::Allow) => {

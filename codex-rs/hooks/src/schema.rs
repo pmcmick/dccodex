@@ -2,6 +2,7 @@ use schemars::JsonSchema;
 use schemars::r#gen::SchemaGenerator;
 use schemars::r#gen::SchemaSettings;
 use schemars::schema::InstanceType;
+use schemars::schema::ObjectValidation;
 use schemars::schema::RootSchema;
 use schemars::schema::Schema;
 use schemars::schema::SchemaObject;
@@ -155,13 +156,6 @@ pub(crate) enum PreToolUseDecisionWire {
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PreToolUseToolInput {
-    pub command: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 #[schemars(rename = "pre-tool-use.command.input")]
 pub(crate) struct PreToolUseCommandInput {
@@ -177,15 +171,9 @@ pub(crate) struct PreToolUseCommandInput {
     pub permission_mode: String,
     #[schemars(schema_with = "pre_tool_use_tool_name_schema")]
     pub tool_name: String,
-    pub tool_input: PreToolUseToolInput,
+    #[schemars(schema_with = "json_object_schema")]
+    pub tool_input: Value,
     pub tool_use_id: String,
-}
-
-#[derive(Debug, Clone, Serialize, JsonSchema)]
-#[serde(rename_all = "camelCase")]
-#[serde(deny_unknown_fields)]
-pub(crate) struct PostToolUseToolInput {
-    pub command: String,
 }
 
 #[derive(Debug, Clone, Serialize, JsonSchema)]
@@ -204,7 +192,8 @@ pub(crate) struct PostToolUseCommandInput {
     pub permission_mode: String,
     #[schemars(schema_with = "post_tool_use_tool_name_schema")]
     pub tool_name: String,
-    pub tool_input: PostToolUseToolInput,
+    #[schemars(schema_with = "json_object_schema")]
+    pub tool_input: Value,
     pub tool_response: Value,
     pub tool_use_id: String,
 }
@@ -454,7 +443,7 @@ fn post_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 }
 
 fn post_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
+    string_schema()
 }
 
 fn pre_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
@@ -462,7 +451,7 @@ fn pre_tool_use_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
 }
 
 fn pre_tool_use_tool_name_schema(_gen: &mut SchemaGenerator) -> Schema {
-    string_const_schema("Bash")
+    string_schema()
 }
 
 fn user_prompt_submit_hook_event_name_schema(_gen: &mut SchemaGenerator) -> Schema {
@@ -494,6 +483,24 @@ fn string_const_schema(value: &str) -> Schema {
     };
     schema.const_value = Some(Value::String(value.to_string()));
     Schema::Object(schema)
+}
+
+fn string_schema() -> Schema {
+    Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::String.into()),
+        ..Default::default()
+    })
+}
+
+fn json_object_schema(_gen: &mut SchemaGenerator) -> Schema {
+    Schema::Object(SchemaObject {
+        instance_type: Some(InstanceType::Object.into()),
+        object: Some(Box::new(ObjectValidation {
+            additional_properties: Some(Box::new(Schema::Bool(true))),
+            ..Default::default()
+        })),
+        ..Default::default()
+    })
 }
 
 fn string_enum_schema(values: &[&str]) -> Schema {

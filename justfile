@@ -49,7 +49,7 @@ install:
 # Prefer this for routine local runs; use explicit `cargo test --all-features`
 # only when you specifically need full feature coverage.
 test:
-    cargo nextest run --no-fail-fast
+    cargo nextest run --no-fail-fast --cargo-profile ci-test
 
 # Build and run Codex from source using Bazel.
 # Note we have to use the combination of `[no-cd]` and `--run_under="cd $PWD &&"`

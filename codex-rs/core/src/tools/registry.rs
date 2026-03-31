@@ -24,9 +24,12 @@ use codex_hooks::HookToolInput;
 use codex_hooks::HookToolInputLocalShell;
 use codex_hooks::HookToolKind;
 use codex_protocol::models::ResponseInputItem;
+use codex_protocol::models::ShellCommandToolCallParams;
+use codex_protocol::models::ShellToolCallParams;
 use codex_tools::ConfiguredToolSpec;
 use codex_utils_readiness::Readiness;
 use serde_json::Value;
+use serde_json::json;
 use tracing::warn;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -103,12 +106,14 @@ impl AnyToolResult {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct PreToolUsePayload {
-    pub(crate) command: String,
+    pub(crate) tool_name: String,
+    pub(crate) tool_input: Value,
 }
 
 #[derive(Debug, Clone, PartialEq)]
 pub(crate) struct PostToolUsePayload {
-    pub(crate) command: String,
+    pub(crate) tool_name: String,
+    pub(crate) tool_input: Value,
     pub(crate) tool_response: Value,
 }
 
@@ -296,19 +301,34 @@ impl ToolRegistry {
             return Err(FunctionCallError::Fatal(message));
         }
 
-        if let Some(pre_tool_use_payload) = handler.pre_tool_use_payload(&invocation)
-            && let Some(reason) = run_pre_tool_use_hooks(
+        let pre_tool_use_payload = handler
+            .pre_tool_use_payload(&invocation)
+            .or_else(|| default_pre_tool_use_payload(&invocation));
+        if let Some(pre_tool_use_payload) = pre_tool_use_payload {
+            let pre_tool_use_outcome = run_pre_tool_use_hooks(
                 &invocation.session,
                 &invocation.turn,
                 invocation.call_id.clone(),
-                pre_tool_use_payload.command.clone(),
+                pre_tool_use_payload.tool_name.clone(),
+                pre_tool_use_payload.tool_input.clone(),
             )
-            .await
-        {
-            return Err(FunctionCallError::RespondToModel(format!(
-                "Command blocked by PreToolUse hook: {reason}. Command: {}",
-                pre_tool_use_payload.command
-            )));
+            .await;
+            if !pre_tool_use_outcome.additional_contexts.is_empty() {
+                record_additional_contexts(
+                    &invocation.session,
+                    &invocation.turn,
+                    pre_tool_use_outcome.additional_contexts,
+                )
+                .await;
+            }
+            if pre_tool_use_outcome.should_block {
+                let reason = pre_tool_use_outcome
+                    .block_reason
+                    .unwrap_or_else(|| "blocked by hook".to_string());
+                return Err(FunctionCallError::RespondToModel(
+                    blocked_pre_tool_use_message(&pre_tool_use_payload, &reason),
+                ));
+            }
         }
 
         let is_mutating = handler.is_mutating(&invocation).await;
@@ -356,11 +376,9 @@ impl ToolRegistry {
         let post_tool_use_payload = if success {
             let guard = response_cell.lock().await;
             guard.as_ref().and_then(|result| {
-                handler.post_tool_use_payload(
-                    &result.call_id,
-                    &result.payload,
-                    result.result.as_ref(),
-                )
+                handler
+                    .post_tool_use_payload(&result.call_id, &result.payload, result.result.as_ref())
+                    .or_else(|| default_post_tool_use_payload(&invocation, result))
             })
         } else {
             None
@@ -371,7 +389,8 @@ impl ToolRegistry {
                     &invocation.session,
                     &invocation.turn,
                     invocation.call_id.clone(),
-                    post_tool_use_payload.command,
+                    post_tool_use_payload.tool_name,
+                    post_tool_use_payload.tool_input,
                     post_tool_use_payload.tool_response,
                 )
                 .await,
@@ -570,6 +589,206 @@ fn hook_tool_kind(tool_input: &HookToolInput) -> HookToolKind {
         HookToolInput::Custom { .. } => HookToolKind::Custom,
         HookToolInput::LocalShell { .. } => HookToolKind::LocalShell,
         HookToolInput::Mcp { .. } => HookToolKind::Mcp,
+    }
+}
+
+fn default_pre_tool_use_payload(invocation: &ToolInvocation) -> Option<PreToolUsePayload> {
+    Some(PreToolUsePayload {
+        tool_name: canonical_hook_tool_name(invocation)?,
+        tool_input: normalized_hook_tool_input(invocation)?,
+    })
+}
+
+fn default_post_tool_use_payload(
+    invocation: &ToolInvocation,
+    result: &AnyToolResult,
+) -> Option<PostToolUsePayload> {
+    Some(PostToolUsePayload {
+        tool_name: canonical_hook_tool_name(invocation)?,
+        tool_input: normalized_hook_tool_input(invocation)?,
+        tool_response: result
+            .result
+            .post_tool_use_response(&result.call_id, &result.payload)
+            .unwrap_or_else(|| Value::String(result.result.log_preview())),
+    })
+}
+
+fn canonical_hook_tool_name(invocation: &ToolInvocation) -> Option<String> {
+    match &invocation.payload {
+        ToolPayload::LocalShell { .. } => Some("Bash".to_string()),
+        ToolPayload::Mcp { server, tool, .. } => Some(format!("mcp__{server}__{tool}")),
+        _ => match invocation.tool_name.as_str() {
+            "shell" | "shell_command" | "exec_command" => Some("Bash".to_string()),
+            "apply_patch" => Some("Edit".to_string()),
+            "read_file" => Some("Read".to_string()),
+            "grep_files" => Some("Grep".to_string()),
+            "list_dir" => Some("Glob".to_string()),
+            _ => None,
+        },
+    }
+}
+
+fn normalized_hook_tool_input(invocation: &ToolInvocation) -> Option<Value> {
+    match &invocation.payload {
+        ToolPayload::LocalShell { params } => Some(json!({
+            "command": codex_shell_command::parse_command::shlex_join(&params.command),
+            "workdir": params.workdir,
+            "timeout_ms": params.timeout_ms,
+            "sandbox_permissions": params.sandbox_permissions,
+            "prefix_rule": params.prefix_rule,
+            "justification": params.justification,
+        })),
+        ToolPayload::Mcp {
+            server: _,
+            tool: _,
+            raw_arguments,
+        } => parse_json_object(raw_arguments)
+            .or_else(|| serde_json::from_str::<Value>(raw_arguments).ok())
+            .map(|arguments| {
+                if arguments.is_object() {
+                    arguments
+                } else {
+                    json!({ "arguments": arguments })
+                }
+            }),
+        ToolPayload::Function { arguments } => normalized_function_hook_tool_input(
+            &invocation.tool_name,
+            arguments,
+            &invocation.turn.cwd,
+        ),
+        ToolPayload::ToolSearch { arguments } => Some(json!({
+            "query": arguments.query,
+            "limit": arguments.limit,
+        })),
+        ToolPayload::Custom { input } => {
+            if invocation.tool_name == "apply_patch" {
+                Some(normalized_apply_patch_hook_input(
+                    input,
+                    &invocation.turn.cwd,
+                ))
+            } else {
+                None
+            }
+        }
+    }
+}
+
+fn normalized_function_hook_tool_input(
+    tool_name: &str,
+    arguments: &str,
+    cwd: &std::path::Path,
+) -> Option<Value> {
+    match tool_name {
+        "shell" => serde_json::from_str::<ShellToolCallParams>(arguments)
+            .ok()
+            .map(|params| {
+                json!({
+                    "command": codex_shell_command::parse_command::shlex_join(&params.command),
+                    "workdir": params.workdir,
+                    "timeout_ms": params.timeout_ms,
+                    "sandbox_permissions": params.sandbox_permissions,
+                    "prefix_rule": params.prefix_rule,
+                    "justification": params.justification,
+                })
+            }),
+        "shell_command" => serde_json::from_str::<ShellCommandToolCallParams>(arguments)
+            .ok()
+            .map(|params| {
+                json!({
+                    "command": params.command,
+                    "workdir": params.workdir,
+                    "login": params.login,
+                    "timeout_ms": params.timeout_ms,
+                    "sandbox_permissions": params.sandbox_permissions,
+                    "prefix_rule": params.prefix_rule,
+                    "justification": params.justification,
+                })
+            }),
+        "exec_command" => parse_json_object(arguments).map(|mut tool_input| {
+            if let Some(command) = tool_input.get("cmd").cloned()
+                && let Some(object) = tool_input.as_object_mut()
+            {
+                object.insert("command".to_string(), command);
+            }
+            tool_input
+        }),
+        "apply_patch" => parse_json_object(arguments).and_then(|tool_input| {
+            tool_input
+                .get("input")
+                .and_then(Value::as_str)
+                .map(|input| normalized_apply_patch_hook_input(input, cwd))
+        }),
+        "read_file" | "grep_files" | "list_dir" => parse_json_object(arguments),
+        _ => None,
+    }
+}
+
+fn parse_json_object(arguments: &str) -> Option<Value> {
+    serde_json::from_str::<Value>(arguments)
+        .ok()
+        .filter(Value::is_object)
+}
+
+fn normalized_apply_patch_hook_input(patch_input: &str, cwd: &std::path::Path) -> Value {
+    let mut tool_input = serde_json::Map::from_iter([
+        ("input".to_string(), Value::String(patch_input.to_string())),
+        ("patch".to_string(), Value::String(patch_input.to_string())),
+    ]);
+    let command = vec!["apply_patch".to_string(), patch_input.to_string()];
+    if let codex_apply_patch::MaybeApplyPatchVerified::Body(action) =
+        codex_apply_patch::maybe_parse_apply_patch_verified(&command, cwd)
+    {
+        let file_paths = apply_patch_hook_file_paths(&action, cwd)
+            .into_iter()
+            .map(Value::String)
+            .collect::<Vec<_>>();
+        if let [Value::String(file_path)] = file_paths.as_slice() {
+            tool_input.insert("file_path".to_string(), Value::String(file_path.clone()));
+        }
+        if !file_paths.is_empty() {
+            tool_input.insert("file_paths".to_string(), Value::Array(file_paths));
+        }
+    }
+    Value::Object(tool_input)
+}
+
+fn apply_patch_hook_file_paths(
+    action: &codex_apply_patch::ApplyPatchAction,
+    cwd: &std::path::Path,
+) -> Vec<String> {
+    let mut file_paths = Vec::new();
+    for (path, change) in action.changes() {
+        let resolved = crate::util::resolve_path(cwd, &path.to_path_buf());
+        file_paths.push(resolved.display().to_string());
+        if let codex_apply_patch::ApplyPatchFileChange::Update { move_path, .. } = change
+            && let Some(move_path) = move_path
+        {
+            let resolved_move = crate::util::resolve_path(cwd, &move_path.to_path_buf());
+            file_paths.push(resolved_move.display().to_string());
+        }
+    }
+    file_paths.sort();
+    file_paths.dedup();
+    file_paths
+}
+
+fn blocked_pre_tool_use_message(payload: &PreToolUsePayload, reason: &str) -> String {
+    if payload.tool_name == "Bash"
+        && let Some(command) = payload.tool_input.get("command").and_then(Value::as_str)
+    {
+        return format!("Command blocked by PreToolUse hook: {reason}. Command: {command}");
+    }
+
+    if let Some(file_path) = payload.tool_input.get("file_path").and_then(Value::as_str) {
+        format!(
+            "Tool blocked by PreToolUse hook: {reason}. Tool: {}. File: {file_path}",
+            payload.tool_name
+        )
+    } else {
+        format!(
+            "Tool blocked by PreToolUse hook: {reason}. Tool: {}",
+            payload.tool_name
+        )
     }
 }
 

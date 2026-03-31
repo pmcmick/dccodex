@@ -757,6 +757,7 @@ async fn load_project_layers(
     trust_context: &ProjectTrustContext,
     codex_home: &Path,
 ) -> io::Result<Vec<ConfigLayerEntry>> {
+    let project_config_dir_name = codex_utils_home_dir::project_config_dir_name(codex_home);
     let codex_home_abs = AbsolutePathBuf::from_absolute_path(codex_home)?;
     let codex_home_normalized =
         normalize_path(codex_home_abs.as_path()).unwrap_or_else(|_| codex_home_abs.to_path_buf());
@@ -778,7 +779,7 @@ async fn load_project_layers(
 
     let mut layers = Vec::new();
     for dir in dirs {
-        let dot_codex = dir.join(".codex");
+        let dot_codex = dir.join(project_config_dir_name);
         if !tokio::fs::metadata(&dot_codex)
             .await
             .map(|meta| meta.is_dir())

@@ -109,6 +109,39 @@ fn detect_repo_lists_agents_md_for_each_cwd() {
 }
 
 #[test]
+fn detect_repo_targets_project_dccodex_config_when_home_uses_dccodex() {
+    let root = TempDir::new().expect("create tempdir");
+    let repo_root = root.path().join("repo");
+    fs::create_dir_all(repo_root.join(".git")).expect("create git dir");
+    fs::create_dir_all(repo_root.join(".claude")).expect("create dot claude");
+    fs::write(
+        repo_root.join(".claude").join("settings.json"),
+        r#"{"model":"claude","env":{"FOO":"bar"}}"#,
+    )
+    .expect("write settings");
+
+    let items = service_for_paths(root.path().join(".claude"), root.path().join(".dccodex"))
+        .detect(ExternalAgentConfigDetectOptions {
+            include_home: false,
+            cwds: Some(vec![repo_root.clone()]),
+        })
+        .expect("detect");
+
+    assert_eq!(
+        items,
+        vec![ExternalAgentConfigMigrationItem {
+            item_type: ExternalAgentConfigMigrationItemType::Config,
+            description: format!(
+                "Migrate {} into {}",
+                repo_root.join(".claude").join("settings.json").display(),
+                repo_root.join(".dccodex").join("config.toml").display()
+            ),
+            cwd: Some(repo_root),
+        }]
+    );
+}
+
+#[test]
 fn import_home_migrates_supported_config_fields_skills_and_agents_md() {
     let (_root, claude_home, codex_home) = fixture_paths();
     let agents_skills = codex_home

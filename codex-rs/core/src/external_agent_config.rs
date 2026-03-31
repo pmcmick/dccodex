@@ -119,7 +119,7 @@ impl ExternalAgentConfigService {
         );
         let target_config = repo_root.map_or_else(
             || self.codex_home.join("config.toml"),
-            |repo_root| repo_root.join(".codex").join("config.toml"),
+            |repo_root| self.repo_target_config(repo_root),
         );
         if source_settings.is_file() {
             let raw_settings = fs::read_to_string(&source_settings)?;
@@ -224,11 +224,21 @@ impl ExternalAgentConfigService {
             .unwrap_or_else(|| PathBuf::from(".agents").join("skills"))
     }
 
+    fn repo_target_config(&self, repo_root: &Path) -> PathBuf {
+        let repo_codex_dir = self
+            .codex_home
+            .file_name()
+            .and_then(|name| name.to_str())
+            .filter(|name| name.starts_with('.'))
+            .unwrap_or(".codex");
+        repo_root.join(repo_codex_dir).join("config.toml")
+    }
+
     fn import_config(&self, cwd: Option<&Path>) -> io::Result<()> {
         let (source_settings, target_config) = if let Some(repo_root) = find_repo_root(cwd)? {
             (
                 repo_root.join(".claude").join("settings.json"),
-                repo_root.join(".codex").join("config.toml"),
+                self.repo_target_config(&repo_root),
             )
         } else if cwd.is_some_and(|cwd| !cwd.as_os_str().is_empty()) {
             return Ok(());

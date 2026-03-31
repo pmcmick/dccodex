@@ -133,7 +133,19 @@ impl ToolHandler for UnifiedExecHandler {
 
         parse_arguments::<ExecCommandArgs>(arguments)
             .ok()
-            .map(|args| PreToolUsePayload { command: args.cmd })
+            .map(|args| PreToolUsePayload {
+                tool_name: "Bash".to_string(),
+                tool_input: serde_json::json!({
+                    "command": args.cmd,
+                    "workdir": args.workdir,
+                    "tty": args.tty,
+                    "yield_time_ms": args.yield_time_ms,
+                    "max_output_tokens": args.max_output_tokens,
+                    "sandbox_permissions": args.sandbox_permissions,
+                    "justification": args.justification,
+                    "prefix_rule": args.prefix_rule,
+                }),
+            })
     }
 
     fn post_tool_use_payload(
@@ -153,7 +165,17 @@ impl ToolHandler for UnifiedExecHandler {
 
         let tool_response = result.post_tool_use_response(call_id, payload)?;
         Some(PostToolUsePayload {
-            command: args.cmd,
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({
+                "command": args.cmd,
+                "workdir": args.workdir,
+                "tty": args.tty,
+                "yield_time_ms": args.yield_time_ms,
+                "max_output_tokens": args.max_output_tokens,
+                "sandbox_permissions": args.sandbox_permissions,
+                "justification": args.justification,
+                "prefix_rule": args.prefix_rule,
+            }),
             tool_response,
         })
     }

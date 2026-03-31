@@ -215,7 +215,17 @@ async fn exec_command_pre_tool_use_payload_uses_raw_command() {
             payload,
         }),
         Some(crate::tools::registry::PreToolUsePayload {
-            command: "printf exec command".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({
+                "command": "printf exec command",
+                "workdir": null,
+                "tty": false,
+                "yield_time_ms": 10000,
+                "max_output_tokens": null,
+                "sandbox_permissions": "use_default",
+                "justification": null,
+                "prefix_rule": null,
+            }),
         })
     );
 }
@@ -266,7 +276,17 @@ fn exec_command_post_tool_use_payload_uses_output_for_noninteractive_one_shot_co
     assert_eq!(
         UnifiedExecHandler.post_tool_use_payload("call-43", &payload, &output),
         Some(crate::tools::registry::PostToolUsePayload {
-            command: "echo three".to_string(),
+            tool_name: "Bash".to_string(),
+            tool_input: serde_json::json!({
+                "command": "echo three",
+                "workdir": null,
+                "tty": false,
+                "yield_time_ms": 10000,
+                "max_output_tokens": null,
+                "sandbox_permissions": "use_default",
+                "justification": null,
+                "prefix_rule": null,
+            }),
             tool_response: serde_json::json!("three"),
         })
     );
