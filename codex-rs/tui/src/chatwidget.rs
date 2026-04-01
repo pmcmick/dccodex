@@ -4047,10 +4047,23 @@ impl ChatWidget {
                 !matches!(
                     entry.kind,
                     codex_protocol::protocol::HookOutputEntryKind::Context
+                        | codex_protocol::protocol::HookOutputEntryKind::Feedback
                 )
             })
             .peekable();
+        let should_surface_header = matches!(
+            event.run.status,
+            codex_protocol::protocol::HookRunStatus::Stopped
+                | codex_protocol::protocol::HookRunStatus::Failed
+                | codex_protocol::protocol::HookRunStatus::Blocked
+        );
+        if visible_entries.peek().is_none() && !should_surface_header {
+            return;
+        }
         if visible_entries.peek().is_none() {
+            let lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
+            self.add_to_history(PlainHistoryCell::new(lines));
+            self.request_redraw();
             return;
         }
         let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
