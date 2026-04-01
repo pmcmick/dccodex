@@ -13712,10 +13712,19 @@ async fn user_prompt_submit_app_server_hook_notifications_render_snapshot() {
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert_snapshot!(
-        "user_prompt_submit_app_server_hook_notifications_render_snapshot",
-        combined
+    assert!(
+        !combined.contains("Running UserPromptSubmit hook"),
+        "{combined}"
     );
+    assert!(
+        combined.contains("UserPromptSubmit hook (stopped)"),
+        "{combined}"
+    );
+    assert!(
+        combined.contains("warning: go-workflow must start from PlanMode"),
+        "{combined}"
+    );
+    assert!(combined.contains("stop: prompt blocked"), "{combined}");
 }
 
 #[tokio::test]
@@ -13817,7 +13826,48 @@ async fn assert_hook_events_snapshot(
         .iter()
         .map(|lines| lines_to_single_string(lines))
         .collect::<String>();
-    assert_snapshot!(snapshot_name, combined);
+    assert!(!combined.contains("Running "), "{snapshot_name}: {combined}");
+    assert!(
+        !combined.contains("hook context: Remember the startup checklist."),
+        "{snapshot_name}: {combined}"
+    );
+    assert!(
+        combined.contains("warning: Heads up from the hook"),
+        "{snapshot_name}: {combined}"
+    );
+}
+
+#[tokio::test]
+async fn context_only_hook_completion_stays_silent() {
+    let (mut chat, mut rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+
+    chat.handle_codex_event(Event {
+        id: "hook-ctx".into(),
+        msg: EventMsg::HookCompleted(codex_protocol::protocol::HookCompletedEvent {
+            turn_id: None,
+            run: codex_protocol::protocol::HookRunSummary {
+                id: "user-prompt-submit:0:/tmp/hooks.json".to_string(),
+                event_name: codex_protocol::protocol::HookEventName::UserPromptSubmit,
+                handler_type: codex_protocol::protocol::HookHandlerType::Command,
+                execution_mode: codex_protocol::protocol::HookExecutionMode::Sync,
+                scope: codex_protocol::protocol::HookScope::Turn,
+                source_path: PathBuf::from("/tmp/hooks.json"),
+                display_order: 0,
+                status: codex_protocol::protocol::HookRunStatus::Completed,
+                status_message: Some("added related code".to_string()),
+                started_at: 1,
+                completed_at: Some(2),
+                duration_ms: Some(1),
+                entries: vec![codex_protocol::protocol::HookOutputEntry {
+                    kind: codex_protocol::protocol::HookOutputEntryKind::Context,
+                    text: "<related-code>...</related-code>".to_string(),
+                }],
+            },
+        }),
+    });
+
+    let cells = drain_insert_history(&mut rx);
+    assert!(cells.is_empty(), "{cells:?}");
 }
 
 // Combined visual snapshot using vt100 for history + direct buffer overlay for UI.

@@ -4033,28 +4033,33 @@ impl ChatWidget {
     }
 
     fn on_hook_started(&mut self, event: codex_protocol::protocol::HookStartedEvent) {
-        let label = hook_event_label(event.run.event_name);
-        let mut message = format!("Running {label} hook");
-        if let Some(status_message) = event.run.status_message
-            && !status_message.is_empty()
-        {
-            message.push_str(": ");
-            message.push_str(&status_message);
-        }
-        self.add_to_history(history_cell::new_info_event(message, /*hint*/ None));
-        self.request_redraw();
+        let _ = event;
     }
 
     fn on_hook_completed(&mut self, event: codex_protocol::protocol::HookCompletedEvent) {
         let status = format!("{:?}", event.run.status).to_lowercase();
         let header = format!("{} hook ({status})", hook_event_label(event.run.event_name));
+        let mut visible_entries = event
+            .run
+            .entries
+            .into_iter()
+            .filter(|entry| {
+                !matches!(
+                    entry.kind,
+                    codex_protocol::protocol::HookOutputEntryKind::Context
+                )
+            })
+            .peekable();
+        if visible_entries.peek().is_none() {
+            return;
+        }
         let mut lines: Vec<ratatui::text::Line<'static>> = vec![header.into()];
-        for entry in event.run.entries {
+        for entry in visible_entries {
             let prefix = match entry.kind {
                 codex_protocol::protocol::HookOutputEntryKind::Warning => "warning: ",
                 codex_protocol::protocol::HookOutputEntryKind::Stop => "stop: ",
                 codex_protocol::protocol::HookOutputEntryKind::Feedback => "feedback: ",
-                codex_protocol::protocol::HookOutputEntryKind::Context => "hook context: ",
+                codex_protocol::protocol::HookOutputEntryKind::Context => "",
                 codex_protocol::protocol::HookOutputEntryKind::Error => "error: ",
             };
             lines.push(format!("  {prefix}{}", entry.text).into());
