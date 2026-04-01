@@ -8121,6 +8121,43 @@ fn render_loaded_plugins_popup(chat: &mut ChatWidget, response: PluginListRespon
     render_bottom_popup(chat, /*width*/ 100)
 }
 
+fn configure_hooks_popup(chat: &mut ChatWidget) -> tempfile::TempDir {
+    let temp = tempdir().expect("tempdir");
+    let config_toml_path = temp.path().join("config.toml").abs();
+    std::fs::write(
+        temp.path().join("hooks.json"),
+        r#"{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Edit",
+        "hooks": [
+          { "type": "command", "command": "python3 pre.py", "timeout": 5 }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "python3 prompt.py" }
+        ]
+      }
+    ]
+  }
+}"#,
+    )
+    .expect("write hooks.json");
+
+    chat.set_feature_enabled(Feature::CodexHooks, /*enabled*/ true);
+    chat.config.config_layer_stack = chat.config.config_layer_stack.with_user_config(
+        &config_toml_path,
+        TomlValue::Table(Default::default()),
+    );
+    chat.config.notify = Some(vec!["notify-send".to_string(), "Codex".to_string()]);
+
+    temp
+}
+
 fn plugins_test_detail(
     summary: PluginSummary,
     description: Option<&str>,
@@ -8183,6 +8220,32 @@ async fn plugins_popup_loading_state_snapshot() {
         "expected /plugins to open in a loading state before the marketplace arrives, got:\n{popup}"
     );
     assert_snapshot!("plugins_popup_loading_state", popup);
+}
+
+#[tokio::test]
+async fn hooks_popup_lists_discovered_hooks() {
+    let (mut chat, _rx, _op_rx) = make_chatwidget_manual(/*model_override*/ None).await;
+    let _temp = configure_hooks_popup(&mut chat);
+
+    chat.add_hooks_output();
+
+    let popup = render_bottom_popup(&chat, /*width*/ 100);
+    assert!(
+        popup.contains("3 hooks discovered"),
+        "expected popup to report the number of discovered hooks: {popup}"
+    );
+    assert!(
+        popup.contains("PreToolUse · Edit"),
+        "expected popup to contain the pre-tool-use hook: {popup}"
+    );
+    assert!(
+        popup.contains("UserPromptSubmit"),
+        "expected popup to contain the prompt-submit hook: {popup}"
+    );
+    assert!(
+        popup.contains("Notification"),
+        "expected popup to contain the legacy notify hook: {popup}"
+    );
 }
 
 #[tokio::test]

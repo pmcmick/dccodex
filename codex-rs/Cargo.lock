@@ -2148,6 +2148,7 @@ dependencies = [
  "chrono",
  "codex-config",
  "codex-protocol",
+ "codex-utils-absolute-path",
  "futures",
  "pretty_assertions",
  "regex",
@@ -2156,6 +2157,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "toml 0.9.11+spec-1.1.0",
 ]
 
 [[package]]
@@ -2645,6 +2647,7 @@ dependencies = [
  "codex-feedback",
  "codex-file-search",
  "codex-git-utils",
+ "codex-hooks",
  "codex-login",
  "codex-otel",
  "codex-protocol",
